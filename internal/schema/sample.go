@@ -99,17 +99,31 @@ type NetInfo struct {
 	TxCum int64 `json:"tx_cum"`
 }
 
-// DiskIOInfo is system-wide aggregate disk I/O, summed across physical
-// devices. The Mac app recomputes rates from cumulative counter deltas
-// across polls (same pattern as NetInfo). ReadBps/WriteBps are populated
-// from a short in-sampler delta window so one-shot mode produces usable
-// numbers without prior state; zero in streaming mode until the second
-// tick.
+// DiskIOInfo is system-wide disk I/O. Top-level fields are the aggregate
+// sum across physical devices (partitions rolled up into their parent);
+// `Devices` carries the same numbers broken out per physical device so
+// the Mac app can chart a specific disk. The Mac app recomputes rates
+// from cumulative counter deltas across polls (same pattern as NetInfo).
+// ReadBps/WriteBps are populated from a short in-sampler delta window
+// so one-shot mode produces usable numbers without prior state; zero in
+// streaming mode until the second tick.
 type DiskIOInfo struct {
-	ReadBps   int64 `json:"read_bps"`
-	WriteBps  int64 `json:"write_bps"`
-	ReadCum   int64 `json:"read_cum"`
-	WriteCum  int64 `json:"write_cum"`
+	ReadBps  int64             `json:"read_bps"`
+	WriteBps int64             `json:"write_bps"`
+	ReadCum  int64             `json:"read_cum"`
+	WriteCum int64             `json:"write_cum"`
+	Devices  []DiskIODeviceInfo `json:"devices,omitempty"`
+}
+
+// DiskIODeviceInfo is per-block-device I/O counters. Name is the kernel
+// device name (e.g. "nvme0n1", "sda") — partitions are excluded to
+// avoid double-counting their parent device.
+type DiskIODeviceInfo struct {
+	Name     string `json:"name"`
+	ReadBps  int64  `json:"read_bps"`
+	WriteBps int64  `json:"write_bps"`
+	ReadCum  int64  `json:"read_cum"`
+	WriteCum int64  `json:"write_cum"`
 }
 
 func FormatTS(t time.Time) string {

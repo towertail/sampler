@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -113,32 +114,35 @@ func Disk() ([]schema.DiskSample, []string) {
 	return out, errs
 }
 
-// sumDiskIO sums ReadBytes/WriteBytes across the IOCountersStat map.
-// Linux returns one entry per block device (sda, nvme0n1, ...) plus
-// partition entries (sda1). Partitions' counters roll up into the
-// whole-device counters, so summing both would double-count. We filter
-// partitions with a simple heuristic: names that end in a digit AND
-// whose parent device is also present in the map.
-func sumDiskIO(counters map[string]disk.IOCountersStat) (read, write uint64) {
-	hasParent := func(name string) bool {
-		// Trim trailing digits (and optional 'p' before them for
-		// nvme0n1p1 -> nvme0n1) to find a plausible parent name.
-		i := len(name)
-		for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
-			i--
-		}
-		if i > 0 && name[i-1] == 'p' {
-			i--
-		}
-		if i == 0 || i == len(name) {
-			return false
-		}
-		parent := name[:i]
-		_, ok := counters[parent]
-		return ok
+// isPartition reports whether `name` names a partition whose parent
+// device is also present in `counters` (e.g. "sda1" when "sda" is in
+// the map, "nvme0n1p1" when "nvme0n1" is). Partitions roll their I/O
+// up into the whole-device counter, so including both would double
+// the numbers. Orphan partitions (a partition with no visible parent,
+// as happens inside some containers) are NOT filtered — otherwise we'd
+// report zero.
+func isPartition(name string, counters map[string]disk.IOCountersStat) bool {
+	// Trim trailing digits (and optional 'p' before them for
+	// nvme0n1p1 -> nvme0n1) to find a plausible parent name.
+	i := len(name)
+	for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
+		i--
 	}
+	if i > 0 && name[i-1] == 'p' {
+		i--
+	}
+	if i == 0 || i == len(name) {
+		return false
+	}
+	parent := name[:i]
+	_, ok := counters[parent]
+	return ok
+}
+
+// sumDiskIO sums ReadBytes/WriteBytes across non-partition entries.
+func sumDiskIO(counters map[string]disk.IOCountersStat) (read, write uint64) {
 	for name, c := range counters {
-		if hasParent(name) {
+		if isPartition(name, counters) {
 			continue
 		}
 		read += c.ReadBytes
@@ -147,11 +151,13 @@ func sumDiskIO(counters map[string]disk.IOCountersStat) (read, write uint64) {
 	return
 }
 
-// DiskIO returns aggregate system-wide disk read/write counters plus
-// their per-second rates over `window`. No-op on platforms where
-// gopsutil's disk.IOCounters returns an error (Darwin supports it via
-// IOKit as of gopsutil v4; older platforms or containers without
-// /proc/diskstats surface in errs).
+// DiskIO returns aggregate system-wide disk read/write counters plus a
+// per-physical-device breakdown. Each device's ReadBps/WriteBps are the
+// rate over `window`. Partitions are rolled up into their parent device
+// to match the aggregate. No-op on platforms where gopsutil's
+// disk.IOCounters returns an error (Darwin supports it via IOKit as of
+// gopsutil v4; older platforms or containers without /proc/diskstats
+// surface in errs).
 func DiskIO(window time.Duration) (schema.DiskIOInfo, []string) {
 	var errs []string
 	var out schema.DiskIOInfo
@@ -186,5 +192,34 @@ func DiskIO(window time.Duration) (schema.DiskIOInfo, []string) {
 			out.WriteBps = int64(float64(w2-w1) / dt)
 		}
 	}
+
+	// Per-device breakdown. We iterate the second snapshot (current
+	// counter state) and look each device up in the first snapshot to
+	// compute the delta. Devices that appeared mid-window keep their
+	// full ReadCum/WriteCum and report zero rate until the next tick.
+	devices := make([]schema.DiskIODeviceInfo, 0, len(second))
+	for name, c2 := range second {
+		if isPartition(name, second) {
+			continue
+		}
+		dev := schema.DiskIODeviceInfo{
+			Name:     name,
+			ReadCum:  int64(c2.ReadBytes),
+			WriteCum: int64(c2.WriteBytes),
+		}
+		if c1, ok := first[name]; ok && dt > 0 {
+			if c2.ReadBytes >= c1.ReadBytes {
+				dev.ReadBps = int64(float64(c2.ReadBytes-c1.ReadBytes) / dt)
+			}
+			if c2.WriteBytes >= c1.WriteBytes {
+				dev.WriteBps = int64(float64(c2.WriteBytes-c1.WriteBytes) / dt)
+			}
+		}
+		devices = append(devices, dev)
+	}
+	// Stable ordering by name — helps the Mac-side picker keep its
+	// selection row stable across ticks.
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
+	out.Devices = devices
 	return out, errs
 }
