@@ -71,6 +71,10 @@ func buildSample(opts *options, window time.Duration) schema.Sample {
 		ds, errs := collect.Disk()
 		allErrs = append(allErrs, errs...)
 		s.Disks = &ds
+
+		io, errs := collect.DiskIO(window)
+		allErrs = append(allErrs, errs...)
+		s.DiskIO = &io
 	}
 
 	if !opts.noNet {

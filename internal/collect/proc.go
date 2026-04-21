@@ -132,6 +132,16 @@ func Proc(window time.Duration, topN int) (schema.ProcList, []string) {
 		if ct, err := f.p.CreateTime(); err == nil && ct > 0 {
 			item.StartTS = schema.FormatTS(time.UnixMilli(ct))
 		}
+		// Per-process disk I/O: requires /proc/<pid>/io read access on
+		// Linux (owning-user or CAP_SYS_PTRACE). Unimplemented on Darwin
+		// in gopsutil. When unavailable, leave fields nil so the Mac
+		// app can distinguish "truly zero" from "no visibility."
+		if io, err := f.p.IOCounters(); err == nil && io != nil {
+			rb := int64(io.ReadBytes)
+			wb := int64(io.WriteBytes)
+			item.ReadBytes = &rb
+			item.WriteBytes = &wb
+		}
 
 		items = append(items, item)
 	}

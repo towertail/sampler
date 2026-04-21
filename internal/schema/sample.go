@@ -14,6 +14,7 @@ type Sample struct {
 	Mem    MemInfo       `json:"mem"`
 	Swap   MemInfo       `json:"swap"`
 	Disks  *[]DiskSample `json:"disks,omitempty"`
+	DiskIO *DiskIOInfo   `json:"disk_io,omitempty"`
 	Net    *NetInfo      `json:"net,omitempty"`
 	Procs  *ProcList     `json:"procs,omitempty"`
 	Errors []string      `json:"errors"`
@@ -34,18 +35,23 @@ type ProcList struct {
 // ProcSample is one process. Fields that require elevated access are
 // omitted when the sampler can't read them — zero-valued rather than
 // emitting nonsense. CPUPct is 0-100 (aggregate across cores, matches
-// top(1) behavior on the host).
+// top(1) behavior on the host). ReadBytes/WriteBytes are lifetime
+// cumulative disk I/O byte counters; nil when the sampler couldn't
+// read them (Linux: /proc/<pid>/io denied without CAP_SYS_PTRACE or
+// process ownership; macOS: gopsutil does not implement per-proc I/O).
 type ProcSample struct {
-	PID     int32   `json:"pid"`
-	PPID    int32   `json:"ppid,omitempty"`
-	Name    string  `json:"name"`
-	Cmd     string  `json:"cmd,omitempty"`
-	User    string  `json:"user,omitempty"`
-	CPUPct  float64 `json:"cpu_pct"`
-	RSS     int64   `json:"rss"`
-	Threads int32   `json:"threads,omitempty"`
-	State   string  `json:"state,omitempty"`
-	StartTS string  `json:"start_ts,omitempty"`
+	PID        int32   `json:"pid"`
+	PPID       int32   `json:"ppid,omitempty"`
+	Name       string  `json:"name"`
+	Cmd        string  `json:"cmd,omitempty"`
+	User       string  `json:"user,omitempty"`
+	CPUPct     float64 `json:"cpu_pct"`
+	RSS        int64   `json:"rss"`
+	Threads    int32   `json:"threads,omitempty"`
+	State      string  `json:"state,omitempty"`
+	StartTS    string  `json:"start_ts,omitempty"`
+	ReadBytes  *int64  `json:"read_bytes,omitempty"`
+	WriteBytes *int64  `json:"write_bytes,omitempty"`
 }
 
 type HostInfo struct {
@@ -91,6 +97,19 @@ type NetInfo struct {
 	TxBps int64 `json:"tx_bps"`
 	RxCum int64 `json:"rx_cum"`
 	TxCum int64 `json:"tx_cum"`
+}
+
+// DiskIOInfo is system-wide aggregate disk I/O, summed across physical
+// devices. The Mac app recomputes rates from cumulative counter deltas
+// across polls (same pattern as NetInfo). ReadBps/WriteBps are populated
+// from a short in-sampler delta window so one-shot mode produces usable
+// numbers without prior state; zero in streaming mode until the second
+// tick.
+type DiskIOInfo struct {
+	ReadBps   int64 `json:"read_bps"`
+	WriteBps  int64 `json:"write_bps"`
+	ReadCum   int64 `json:"read_cum"`
+	WriteCum  int64 `json:"write_cum"`
 }
 
 func FormatTS(t time.Time) string {
