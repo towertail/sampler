@@ -1,0 +1,63 @@
+{
+  "v": 1,
+  "ts": "2026-04-20T19:42:07.103Z",
+  "host": {
+    "name": "db-primary",
+    "os": "linux",
+    "arch": "arm64",
+    "kernel": "6.6.22-1-arm64",
+    "uptime_s": 1048273,
+    "sampler": "0.1.0+abc1234",
+    "machine_id": "24c63e84-ed40-5734-bf08-72572b9bea7d"
+  },
+  "cpu": {
+    "pct": 42.3,
+    "load_1": 1.24,
+    "load_5": 0.98,
+    "load_15": 0.81,
+    "cores": 8,
+    "user_ms": 1000,
+    "system_ms": 500,
+    "idle_ms": 8000,
+    "iowait_ms": 50,
+    "total_ms": 9550
+  },
+  "mem": {
+    "used": 5814763520,
+    "total": 16777216000
+  },
+  "swap": {
+    "used": 0,
+    "total": 0
+  },
+  "disks": [
+    { "mount": "/",     "fs": "ext4", "used": 42949672960, "total": 107374182400 },
+    { "mount": "/data", "fs": "xfs",  "used": 17179869184, "total": 53687091200 }
+  ],
+  "disk_io": {
+    "read_bps":   4194304,
+    "write_bps":  1048576,
+    "read_cum":   2800479338496,
+    "write_cum":  1525421113344,
+    "devices": [
+      { "name": "nvme0n1", "read_bps": 4194304, "write_bps": 1048576, "read_cum": 2800479338496, "write_cum": 1525421113344 }
+    ]
+  },
+  "net": {
+    "rx_bps": 3355443,
+    "tx_bps": 838860,
+    "rx_cum": 198723849203,
+    "tx_cum":  48239874321
+  },
+  "procs": {
+    "root": false,
+    "top_n": 20,
+    "total": 312,
+    "visible": 311,
+    "items": [
+      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "read_bytes": 58720256, "write_bytes": 12582912 },
+      { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S" }
+    ]
+  },
+  "errors": []
+}
