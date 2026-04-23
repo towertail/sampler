@@ -4,7 +4,7 @@ import (
 	"runtime"
 
 	"github.com/shirou/gopsutil/v4/host"
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/pkg/schema"
 	"github.com/towertail/sampler/internal/version"
 )
 

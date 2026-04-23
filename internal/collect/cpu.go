@@ -5,7 +5,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/load"
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 // SampleWindow is the self-sampling interval used by CPU%, net throughput,

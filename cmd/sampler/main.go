@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -10,8 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/urfave/cli/v3"
+
 	"github.com/towertail/sampler/internal/collect"
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/internal/push"
+	"github.com/towertail/sampler/pkg/schema"
+	"github.com/towertail/sampler/internal/svc"
 	"github.com/towertail/sampler/internal/version"
 )
 
@@ -26,26 +30,233 @@ type options struct {
 	topN      int
 }
 
-func parseFlags(args []string) (*options, error) {
-	fs := flag.NewFlagSet("towertail-sampler", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	opts := &options{}
-	fs.BoolVar(&opts.once, "once", false, "emit one sample and exit")
-	fs.DurationVar(&opts.interval, "interval", 0, "emit NDJSON every <dur>")
-	fs.BoolVar(&opts.ver, "version", false, "print version and exit")
-	fs.BoolVar(&opts.selfCheck, "self-check", false, "collect one sample, print 'ok', exit 0")
-	fs.BoolVar(&opts.noDisk, "no-disk", false, "skip disk collection")
-	fs.BoolVar(&opts.noNet, "no-net", false, "skip net collection")
-	fs.BoolVar(&opts.noProc, "no-proc", false, "skip per-process collection")
-	fs.IntVar(&opts.topN, "top-n", 20, "number of top processes to return (union of top-by-CPU and top-by-RSS, deduped). 0 disables the cap.")
-	if err := fs.Parse(args); err != nil {
-		return nil, err
+// run is kept as the legacy test surface (main_test.go calls it).
+// urfave/cli replaces argument parsing but still dispatches into the
+// same sample-building code paths below.
+func run(args []string, stdout io.Writer, stderr io.Writer) int {
+	app := newCLI(stdout, stderr)
+	if err := app.Run(context.Background(), append([]string{"towertail-sampler"}, args...)); err != nil {
+		fmt.Fprintln(stderr, err)
+		if ee, ok := err.(*exitError); ok {
+			return ee.code
+		}
+		return 1
 	}
-	return opts, nil
+	return 0
 }
 
-// buildSample collects one sample. Stateless: delta math happens inside
-// the individual collectors using their own short self-sampling window.
+func main() {
+	code := run(os.Args[1:], os.Stdout, os.Stderr)
+	os.Exit(code)
+}
+
+// exitError is thrown by subcommands that want a specific exit code.
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
+
+func newCLI(stdout, stderr io.Writer) *cli.Command {
+	return &cli.Command{
+		Name:    "towertail-sampler",
+		Usage:   "Towertail host metrics sampler",
+		Version: fmt.Sprintf("%s %s", version.Version, version.SHA),
+		Writer:  stdout,
+		ErrWriter: stderr,
+		// Legacy top-level flags — preserved so the Mac-side bootstrap
+		// that invokes `towertail-sampler --version`, `--once`, and
+		// `--self-check` over SSH keeps working untouched.
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "once", Usage: "emit one sample and exit"},
+			&cli.DurationFlag{Name: "interval", Usage: "emit NDJSON every <dur>"},
+			&cli.BoolFlag{Name: "version", Aliases: []string{"V"}, Usage: "print version and exit"},
+			&cli.BoolFlag{Name: "self-check", Usage: "verify the binary runs on this host"},
+			&cli.BoolFlag{Name: "no-disk", Usage: "skip disk collection"},
+			&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
+			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
+			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			return runRoot(ctx, c, stdout, stderr)
+		},
+		Commands: []*cli.Command{
+			{
+				Name:  "once",
+				Usage: "emit one sample and exit",
+				Flags: metricGatingFlags(),
+				Action: func(ctx context.Context, c *cli.Command) error {
+					opts := gatingFromCmd(c)
+					opts.once = true
+					return runOnce(opts, stdout, stderr)
+				},
+			},
+			{
+				Name:  "stream",
+				Usage: "emit NDJSON at --interval",
+				Flags: append(metricGatingFlags(), &cli.DurationFlag{Name: "interval", Value: time.Second, Usage: "tick duration"}),
+				Action: func(ctx context.Context, c *cli.Command) error {
+					opts := gatingFromCmd(c)
+					opts.interval = c.Duration("interval")
+					return runStream(ctx, opts, stdout, stderr)
+				},
+			},
+			{
+				Name:  "push",
+				Usage: "collect samples and push to a Towertail server",
+				Flags: append(metricGatingFlags(),
+					&cli.StringFlag{Name: "endpoint", Usage: "server base URL", Required: true, Sources: cli.EnvVars("TOWERTAIL_ENDPOINT")},
+					&cli.StringFlag{Name: "token", Usage: "sampler bearer token", Sources: cli.EnvVars("TOWERTAIL_TOKEN")},
+					&cli.StringFlag{Name: "token-file", Usage: "file containing the bearer token"},
+					&cli.DurationFlag{Name: "interval", Value: 30 * time.Second, Usage: "sample cadence"},
+					&cli.DurationFlag{Name: "flush", Value: 5 * time.Second, Usage: "max flush period"},
+					&cli.IntFlag{Name: "batch", Value: 10, Usage: "max samples per batch"},
+					&cli.IntFlag{Name: "buffer", Value: 1000, Usage: "ring buffer size"},
+					&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued control messages (kill_process)"},
+					&cli.DurationFlag{Name: "heartbeat", Value: 15 * time.Second, Usage: "control long-poll cadence"},
+					&cli.BoolFlag{Name: "insecure", Usage: "accept self-signed TLS certs"},
+				),
+				Action: func(ctx context.Context, c *cli.Command) error {
+					opts := gatingFromCmd(c)
+					opts.interval = c.Duration("interval")
+					token, err := resolveToken(c)
+					if err != nil {
+						return err
+					}
+					pcfg := push.Config{
+						Endpoint:      c.String("endpoint"),
+						Token:         token,
+						Interval:      opts.interval,
+						FlushInterval: c.Duration("flush"),
+						BatchSize:     c.Int("batch"),
+						Buffer:        c.Int("buffer"),
+						AllowControl:  c.Bool("allow-control"),
+						Heartbeat:     c.Duration("heartbeat"),
+						Insecure:      c.Bool("insecure"),
+					}
+					return push.Run(ctx, pcfg, func() schema.Sample {
+						return streamingSample(&opts)
+					}, stderr)
+				},
+			},
+			{
+				Name:  "service",
+				Usage: "manage the sampler as a background service",
+				Commands: []*cli.Command{
+					{Name: "install", Flags: serviceInstallFlags(), Action: runServiceInstall},
+					{Name: "uninstall", Action: runServiceUninstall},
+					{Name: "start", Action: runServiceStart},
+					{Name: "stop", Action: runServiceStop},
+					{Name: "status", Action: runServiceStatus},
+					{Name: "log", Flags: []cli.Flag{&cli.BoolFlag{Name: "follow", Aliases: []string{"f"}}}, Action: runServiceLog},
+				},
+			},
+			{
+				Name:  "version",
+				Usage: "print version",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					fmt.Fprintf(stdout, "towertail-sampler %s %s\n", version.Version, version.SHA)
+					return nil
+				},
+			},
+			{
+				Name:  "self-check",
+				Usage: "collect one sample, throw it away, print 'ok'",
+				Action: func(ctx context.Context, c *cli.Command) error {
+					opts := options{}
+					_ = buildSample(&opts, 50*time.Millisecond)
+					fmt.Fprintln(stdout, "ok")
+					return nil
+				},
+			},
+		},
+	}
+}
+
+// metricGatingFlags are the shared --no-disk / --no-net / --no-proc /
+// --top-n flags used by the collect subcommands.
+func metricGatingFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.BoolFlag{Name: "no-disk"},
+		&cli.BoolFlag{Name: "no-net"},
+		&cli.BoolFlag{Name: "no-proc"},
+		&cli.IntFlag{Name: "top-n", Value: 20},
+	}
+}
+
+func gatingFromCmd(c *cli.Command) options {
+	return options{
+		noDisk: c.Bool("no-disk"),
+		noNet:  c.Bool("no-net"),
+		noProc: c.Bool("no-proc"),
+		topN:   c.Int("top-n"),
+	}
+}
+
+// runRoot dispatches the legacy top-level flag modes. If none match it
+// defaults to --once (matches the docs/sampler.md §3.1 contract).
+func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) error {
+	// --version / --self-check short-circuit even when other flags are set.
+	if c.Bool("version") {
+		fmt.Fprintf(stdout, "towertail-sampler %s %s\n", version.Version, version.SHA)
+		return nil
+	}
+	if c.Bool("self-check") {
+		opts := options{}
+		_ = buildSample(&opts, 50*time.Millisecond)
+		fmt.Fprintln(stdout, "ok")
+		return nil
+	}
+	opts := options{
+		once:     c.Bool("once"),
+		interval: c.Duration("interval"),
+		noDisk:   c.Bool("no-disk"),
+		noNet:    c.Bool("no-net"),
+		noProc:   c.Bool("no-proc"),
+		topN:     c.Int("top-n"),
+	}
+	if opts.interval > 0 {
+		return runStream(ctx, opts, stdout, stderr)
+	}
+	return runOnce(opts, stdout, stderr)
+}
+
+func runOnce(opts options, stdout, stderr io.Writer) error {
+	s := buildSample(&opts, collect.SampleWindow)
+	return writeSample(stdout, s)
+}
+
+func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) error {
+	if opts.interval <= 0 {
+		opts.interval = time.Second
+	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	// Emit the first sample immediately.
+	s := streamingSample(&opts)
+	if err := writeSample(stdout, s); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(opts.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-sig:
+			return nil
+		case <-ticker.C:
+			s := streamingSample(&opts)
+			if err := writeSample(stdout, s); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func buildSample(opts *options, window time.Duration) schema.Sample {
 	var allErrs []string
 
@@ -96,10 +307,6 @@ func buildSample(opts *options, window time.Duration) schema.Sample {
 	return s
 }
 
-// streamingSample builds one tick's sample. For v1 simplicity, streaming
-// mode uses the same short self-sampling window as one-shot; a stateful
-// optimization using previous-tick counters can be added later without
-// changing the schema.
 func streamingSample(opts *options) schema.Sample {
 	return buildSample(opts, collect.SampleWindow)
 }
@@ -110,62 +317,108 @@ func writeSample(w io.Writer, s schema.Sample) error {
 	return enc.Encode(s)
 }
 
-func run(args []string, stdout io.Writer, stderr io.Writer) int {
-	opts, err := parseFlags(args)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
+// resolveToken pulls a sampler bearer from --token, then --token-file,
+// then TOWERTAIL_TOKEN. Returns an error if none are set.
+func resolveToken(c *cli.Command) (string, error) {
+	if v := c.String("token"); v != "" {
+		return v, nil
 	}
-
-	if opts.ver {
-		fmt.Fprintf(stdout, "towertail-sampler %s %s\n", version.Version, version.SHA)
-		return 0
-	}
-
-	if opts.selfCheck {
-		_ = buildSample(opts, 50*time.Millisecond)
-		fmt.Fprintln(stdout, "ok")
-		return 0
-	}
-
-	// Default to --once if no mode flag given.
-	if opts.interval <= 0 {
-		s := buildSample(opts, collect.SampleWindow)
-		if err := writeSample(stdout, s); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
+	if p := c.String("token-file"); p != "" {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return "", err
 		}
-		return 0
+		return trimNewlines(string(b)), nil
 	}
+	return "", fmt.Errorf("--token or --token-file required (or TOWERTAIL_TOKEN env)")
+}
 
-	// Streaming mode.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
-
-	ticker := time.NewTicker(opts.interval)
-	defer ticker.Stop()
-
-	// Emit the first sample immediately so consumers don't have to wait
-	// a full interval for initial data.
-	s := streamingSample(opts)
-	if err := writeSample(stdout, s); err != nil {
-		return 1
+func trimNewlines(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r' || s[len(s)-1] == ' ') {
+		s = s[:len(s)-1]
 	}
+	return s
+}
 
-	for {
-		select {
-		case <-sig:
-			return 0
-		case <-ticker.C:
-			s := streamingSample(opts)
-			if err := writeSample(stdout, s); err != nil {
-				return 1
-			}
-		}
+// -------- service subcommand plumbing --------
+
+func serviceInstallFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "endpoint", Usage: "server URL", Required: true},
+		&cli.StringFlag{Name: "token", Usage: "sampler bearer token", Required: true},
+		&cli.StringFlag{Name: "user", Usage: "user to run the service as (linux)"},
+		&cli.DurationFlag{Name: "interval", Value: 30 * time.Second},
+		&cli.BoolFlag{Name: "system", Usage: "install as system service instead of per-user"},
+		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued kill_process"},
 	}
 }
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+func serviceManager(c *cli.Command) (svc.Manager, error) {
+	return svc.NewManager(svc.Options{
+		System: c.Bool("system"),
+	})
+}
+
+func runServiceInstall(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return m.Install(ctx, svc.InstallConfig{
+		ExecPath:     exe,
+		Endpoint:     c.String("endpoint"),
+		Token:        c.String("token"),
+		User:         c.String("user"),
+		Interval:     c.Duration("interval"),
+		AllowControl: c.Bool("allow-control"),
+	})
+}
+
+func runServiceUninstall(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	return m.Uninstall(ctx)
+}
+
+func runServiceStart(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	return m.Start(ctx)
+}
+
+func runServiceStop(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	return m.Stop(ctx)
+}
+
+func runServiceStatus(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	st, err := m.Status(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(c.Writer, st)
+	return nil
+}
+
+func runServiceLog(ctx context.Context, c *cli.Command) error {
+	m, err := serviceManager(c)
+	if err != nil {
+		return err
+	}
+	return m.Log(ctx, c.Bool("follow"), c.Writer)
 }

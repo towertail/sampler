@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 func TestProcReturnsItems(t *testing.T) {

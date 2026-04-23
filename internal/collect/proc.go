@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 // IsRoot reports whether the sampler is running with euid 0. Linux drops into

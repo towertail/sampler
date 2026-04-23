@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
-	"github.com/towertail/sampler/internal/schema"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 // fstypes we never want to report — synthetic, ephemeral, or not meaningful
