@@ -59,6 +59,13 @@ func Disk() ([]schema.DiskSample, []string) {
 	seen := make(map[string]bool)
 
 	for _, p := range parts {
+		// Windows returns empty-mountpoint entries for removable drives
+		// with no media (empty DVD bays, unmapped SD readers). disk.Usage
+		// on an empty path errors with "system cannot find path specified"
+		// and floods errors[] on every poll. Skip cheaply.
+		if p.Mountpoint == "" {
+			continue
+		}
 		fs := strings.ToLower(p.Fstype)
 		if excludedFS[fs] {
 			continue

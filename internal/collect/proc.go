@@ -3,18 +3,22 @@ package collect
 import (
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/towertail/sampler/pkg/schema"
 )
 
-// IsRoot reports whether the sampler is running with euid 0. Linux drops into
-// the "can read every /proc/<pid>" regime here; macOS gets to enumerate
-// other users' processes. We use this both to gate optional fields and to
-// tell the Mac app the list is comprehensive.
+// IsRoot reports whether the sampler is running with the host's
+// privileged regime — euid 0 on Unix, an elevated token on Windows.
+// Linux drops into the "can read every /proc/<pid>" regime here; macOS
+// gets to enumerate other users' processes; Windows can query
+// cross-user GetProcessIoCounters and WMI classes otherwise gated.
+// We use this both to gate optional fields and to tell the client the
+// process list is comprehensive.
 func IsRoot() bool {
-	return os.Geteuid() == 0
+	return isElevated()
 }
 
 // Proc enumerates processes and returns the union top-N by CPU% and by RSS,
@@ -54,7 +58,7 @@ func Proc(window time.Duration, topN int) (schema.ProcList, []string) {
 		if p.Pid == selfPID {
 			continue
 		}
-		if name, err := p.Name(); err == nil && name == "towertail-sampler" {
+		if name, err := p.Name(); err == nil && strings.TrimSuffix(name, ".exe") == "towertail-sampler" {
 			continue
 		}
 		filtered = append(filtered, p)
