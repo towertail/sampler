@@ -20,14 +20,15 @@ import (
 )
 
 type options struct {
-	once      bool
-	interval  time.Duration
-	ver       bool
-	selfCheck bool
-	noDisk    bool
-	noNet     bool
-	noProc    bool
-	topN      int
+	once       bool
+	interval   time.Duration
+	ver        bool
+	selfCheck  bool
+	noDisk     bool
+	noNet      bool
+	noProc     bool
+	topN       int
+	maxRuntime time.Duration
 }
 
 // run is kept as the legacy test surface (main_test.go calls it).
@@ -77,6 +78,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
 			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
 			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
+			&cli.DurationFlag{Name: "max-runtime", Usage: "exit after this duration (streaming modes only; 0 = no limit)"},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
 			return runRoot(ctx, c, stdout, stderr)
@@ -95,10 +97,14 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			{
 				Name:  "stream",
 				Usage: "emit NDJSON at --interval",
-				Flags: append(metricGatingFlags(), &cli.DurationFlag{Name: "interval", Value: time.Second, Usage: "tick duration"}),
+				Flags: append(metricGatingFlags(),
+					&cli.DurationFlag{Name: "interval", Value: time.Second, Usage: "tick duration"},
+					&cli.DurationFlag{Name: "max-runtime", Usage: "exit after this duration (0 = no limit)"},
+				),
 				Action: func(ctx context.Context, c *cli.Command) error {
 					opts := gatingFromCmd(c)
 					opts.interval = c.Duration("interval")
+					opts.maxRuntime = c.Duration("max-runtime")
 					return runStream(ctx, opts, stdout, stderr)
 				},
 			},
@@ -209,12 +215,13 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 		return nil
 	}
 	opts := options{
-		once:     c.Bool("once"),
-		interval: c.Duration("interval"),
-		noDisk:   c.Bool("no-disk"),
-		noNet:    c.Bool("no-net"),
-		noProc:   c.Bool("no-proc"),
-		topN:     c.Int("top-n"),
+		once:       c.Bool("once"),
+		interval:   c.Duration("interval"),
+		noDisk:     c.Bool("no-disk"),
+		noNet:      c.Bool("no-net"),
+		noProc:     c.Bool("no-proc"),
+		topN:       c.Int("top-n"),
+		maxRuntime: c.Duration("max-runtime"),
 	}
 	if opts.interval > 0 {
 		return runStream(ctx, opts, stdout, stderr)
@@ -234,6 +241,27 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sig)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Watchdog: if the parent (an SSH session) dies, sshd closes our
+	// stdin. Without this, we'd only notice the disconnect on the next
+	// stdout write — and if the controlling pipe goes half-open the
+	// process can linger indefinitely. A goroutine reading stdin returns
+	// on EOF / read error and cancels the context, so the loop exits.
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		cancel()
+	}()
+
+	// Optional self-imposed lifetime cap. Bounds the worst case if the
+	// stdin watchdog never trips (e.g. some sshd configs that don't
+	// close the pipe promptly).
+	if opts.maxRuntime > 0 {
+		t := time.AfterFunc(opts.maxRuntime, cancel)
+		defer t.Stop()
+	}
 
 	// Emit the first sample immediately.
 	s := streamingSample(&opts)
