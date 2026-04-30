@@ -20,15 +20,40 @@ import (
 )
 
 type options struct {
-	once       bool
-	interval   time.Duration
-	ver        bool
-	selfCheck  bool
-	noDisk     bool
-	noNet      bool
-	noProc     bool
-	topN       int
-	maxRuntime time.Duration
+	once          bool
+	interval      time.Duration
+	ver           bool
+	selfCheck     bool
+	noDisk        bool
+	noNet         bool
+	noProc        bool
+	noPorts       bool
+	topN          int
+	maxRuntime    time.Duration
+	portsInterval time.Duration
+	portsMax      int
+}
+
+// portCache holds the last ports snapshot in streaming mode so the
+// sampler can re-emit it on intermediate ticks. The collector is the
+// most expensive thing the sampler does on Linux (walks /proc/<pid>/fd/*),
+// so refreshing every 10s instead of every 1s tick is a 10x cost cut on
+// busy hosts. Stale-but-present is better than missing — the client
+// reads `collected_ts` to render staleness.
+type portCache struct {
+	last         *schema.PortList
+	lastErrs     []string
+	lastRefresh  time.Time
+}
+
+func (pc *portCache) get(now time.Time, every time.Duration, max int) (*schema.PortList, []string) {
+	if pc.last == nil || now.Sub(pc.lastRefresh) >= every {
+		p, errs := collect.Ports(max)
+		pc.last = &p
+		pc.lastErrs = errs
+		pc.lastRefresh = now
+	}
+	return pc.last, pc.lastErrs
 }
 
 // run is kept as the legacy test surface (main_test.go calls it).
@@ -77,7 +102,10 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			&cli.BoolFlag{Name: "no-disk", Usage: "skip disk collection"},
 			&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
 			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
+			&cli.BoolFlag{Name: "no-ports", Usage: "skip per-process ports collection"},
 			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
+			&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval, Usage: "ports refresh cadence in streaming mode"},
+			&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn, Usage: "max connections enumerated per ports refresh"},
 			&cli.DurationFlag{Name: "max-runtime", Usage: "exit after this duration (streaming modes only; 0 = no limit)"},
 		},
 		Action: func(ctx context.Context, c *cli.Command) error {
@@ -141,8 +169,12 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 						Heartbeat:     c.Duration("heartbeat"),
 						Insecure:      c.Bool("insecure"),
 					}
+					// Push mode is a long-lived loop too — use a port cache so
+					// the expensive ports collector runs every ports-interval
+					// rather than every sample.
+					pc := &portCache{}
 					return push.Run(ctx, pcfg, func() schema.Sample {
-						return streamingSample(&opts)
+						return streamingSample(&opts, pc)
 					}, stderr)
 				},
 			},
@@ -171,7 +203,10 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Usage: "collect one sample, throw it away, print 'ok'",
 				Action: func(ctx context.Context, c *cli.Command) error {
 					opts := options{}
-					_ = buildSample(&opts, 50*time.Millisecond)
+					// self-check skips ports — it's a fast "does this binary run" probe,
+		// not a full collection.
+		opts.noPorts = true
+		_ = buildSample(&opts, 50*time.Millisecond, nil)
 					fmt.Fprintln(stdout, "ok")
 					return nil
 				},
@@ -181,22 +216,28 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 }
 
 // metricGatingFlags are the shared --no-disk / --no-net / --no-proc /
-// --top-n flags used by the collect subcommands.
+// --no-ports / --top-n / --ports-* flags used by the collect subcommands.
 func metricGatingFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.BoolFlag{Name: "no-disk"},
 		&cli.BoolFlag{Name: "no-net"},
 		&cli.BoolFlag{Name: "no-proc"},
+		&cli.BoolFlag{Name: "no-ports"},
 		&cli.IntFlag{Name: "top-n", Value: 20},
+		&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval},
+		&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn},
 	}
 }
 
 func gatingFromCmd(c *cli.Command) options {
 	return options{
-		noDisk: c.Bool("no-disk"),
-		noNet:  c.Bool("no-net"),
-		noProc: c.Bool("no-proc"),
-		topN:   c.Int("top-n"),
+		noDisk:        c.Bool("no-disk"),
+		noNet:         c.Bool("no-net"),
+		noProc:        c.Bool("no-proc"),
+		noPorts:       c.Bool("no-ports"),
+		topN:          c.Int("top-n"),
+		portsInterval: c.Duration("ports-interval"),
+		portsMax:      c.Int("ports-max"),
 	}
 }
 
@@ -210,18 +251,24 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 	}
 	if c.Bool("self-check") {
 		opts := options{}
-		_ = buildSample(&opts, 50*time.Millisecond)
+		// self-check skips ports — it's a fast "does this binary run" probe,
+		// not a full collection.
+		opts.noPorts = true
+		_ = buildSample(&opts, 50*time.Millisecond, nil)
 		fmt.Fprintln(stdout, "ok")
 		return nil
 	}
 	opts := options{
-		once:       c.Bool("once"),
-		interval:   c.Duration("interval"),
-		noDisk:     c.Bool("no-disk"),
-		noNet:      c.Bool("no-net"),
-		noProc:     c.Bool("no-proc"),
-		topN:       c.Int("top-n"),
-		maxRuntime: c.Duration("max-runtime"),
+		once:          c.Bool("once"),
+		interval:      c.Duration("interval"),
+		noDisk:        c.Bool("no-disk"),
+		noNet:         c.Bool("no-net"),
+		noProc:        c.Bool("no-proc"),
+		noPorts:       c.Bool("no-ports"),
+		topN:          c.Int("top-n"),
+		maxRuntime:    c.Duration("max-runtime"),
+		portsInterval: c.Duration("ports-interval"),
+		portsMax:      c.Int("ports-max"),
 	}
 	if opts.interval > 0 {
 		return runStream(ctx, opts, stdout, stderr)
@@ -230,7 +277,9 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 }
 
 func runOnce(opts options, stdout, stderr io.Writer) error {
-	s := buildSample(&opts, collect.SampleWindow)
+	// One-shot: always do a fresh ports scan, no cache. The
+	// --ports-interval flag is meaningful only in streaming mode.
+	s := buildSample(&opts, collect.SampleWindow, nil)
 	return writeSample(stdout, s)
 }
 
@@ -263,8 +312,14 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 		defer t.Stop()
 	}
 
+	// Per-process ports refresh out-of-band from the main tick (default
+	// every 10s). Cache the snapshot and re-emit it unchanged on
+	// intermediate ticks so a freshly-attached client gets data within
+	// one tick instead of waiting up to ports-interval.
+	pc := &portCache{}
+
 	// Emit the first sample immediately.
-	s := streamingSample(&opts)
+	s := streamingSample(&opts, pc)
 	if err := writeSample(stdout, s); err != nil {
 		return err
 	}
@@ -277,7 +332,7 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 		case <-sig:
 			return nil
 		case <-ticker.C:
-			s := streamingSample(&opts)
+			s := streamingSample(&opts, pc)
 			if err := writeSample(stdout, s); err != nil {
 				return err
 			}
@@ -285,7 +340,7 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 	}
 }
 
-func buildSample(opts *options, window time.Duration) schema.Sample {
+func buildSample(opts *options, window time.Duration, pc *portCache) schema.Sample {
 	var allErrs []string
 
 	h, errs := collect.Host()
@@ -328,6 +383,26 @@ func buildSample(opts *options, window time.Duration) schema.Sample {
 		s.Procs = &p
 	}
 
+	if !opts.noPorts {
+		max := opts.portsMax
+		if max <= 0 {
+			max = collect.DefaultPortsMaxConn
+		}
+		if pc != nil {
+			every := opts.portsInterval
+			if every <= 0 {
+				every = collect.DefaultPortsInterval
+			}
+			p, errs := pc.get(time.Now(), every, max)
+			allErrs = append(allErrs, errs...)
+			s.Ports = p
+		} else {
+			p, errs := collect.Ports(max)
+			allErrs = append(allErrs, errs...)
+			s.Ports = &p
+		}
+	}
+
 	if allErrs == nil {
 		allErrs = []string{}
 	}
@@ -335,8 +410,8 @@ func buildSample(opts *options, window time.Duration) schema.Sample {
 	return s
 }
 
-func streamingSample(opts *options) schema.Sample {
-	return buildSample(opts, collect.SampleWindow)
+func streamingSample(opts *options, pc *portCache) schema.Sample {
+	return buildSample(opts, collect.SampleWindow, pc)
 }
 
 func writeSample(w io.Writer, s schema.Sample) error {

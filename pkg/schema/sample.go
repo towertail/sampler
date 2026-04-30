@@ -17,6 +17,7 @@ type Sample struct {
 	DiskIO *DiskIOInfo   `json:"disk_io,omitempty"`
 	Net    *NetInfo      `json:"net,omitempty"`
 	Procs  *ProcList     `json:"procs,omitempty"`
+	Ports  *PortList     `json:"ports,omitempty"`
 	Errors []string      `json:"errors"`
 }
 
@@ -124,6 +125,55 @@ type DiskIODeviceInfo struct {
 	WriteBps int64  `json:"write_bps"`
 	ReadCum  int64  `json:"read_cum"`
 	WriteCum int64  `json:"write_cum"`
+}
+
+// PortList is a per-PID aggregate view of open sockets on the host.
+// Refreshed on a slower cadence than the rest of the sample (default 10s)
+// because enumerating connections walks /proc/<pid>/fd/* on Linux which
+// is the most expensive collector by an order of magnitude. Between
+// refreshes the cached snapshot is re-emitted unchanged.
+//
+// CollectedTS is the wall-clock when the snapshot was actually built —
+// distinct from the sample's top-level TS so the client can render
+// "ports as of HH:MM:SS" instead of pretending the data is fresh.
+//
+// MaxConn is the cap passed to gopsutil's ConnectionsMax. Truncated is
+// true when the cap was hit (some connections are not represented).
+// Total is the number of connections observed (≤ MaxConn).
+type PortList struct {
+	Root        bool       `json:"root"`
+	CollectedTS string     `json:"collected_ts"`
+	MaxConn     int        `json:"max_conn"`
+	Truncated   bool       `json:"truncated"`
+	Total       int        `json:"total"`
+	Items       []PortItem `json:"items"`
+}
+
+// PortItem is one process's port footprint. ListenTCP/ListenUDP are
+// sorted, deduped local listening port numbers. EstOut is the count of
+// outbound ESTABLISHED TCP connections; EstIn is the count of inbound
+// ESTABLISHED TCP connections (peer connecting to one of our listening
+// ports). UDPSockets counts UDP sockets without a peer (UDP has no
+// connection state — this is "open udp ports"). TopRemotePorts are the
+// most-frequently-seen remote ports for outbound connections (truncated
+// to 5 entries) so the UI can spot "talking to a lot of :443" patterns.
+type PortItem struct {
+	PID            int32        `json:"pid"`
+	Name           string       `json:"name,omitempty"`
+	User           string       `json:"user,omitempty"`
+	ListenTCP      []uint32     `json:"listen_tcp,omitempty"`
+	ListenUDP      []uint32     `json:"listen_udp,omitempty"`
+	EstOut         int          `json:"est_out"`
+	EstIn          int          `json:"est_in"`
+	UDPSockets     int          `json:"udp_sockets,omitempty"`
+	TopRemotePorts []PortCount  `json:"top_remote_ports,omitempty"`
+}
+
+// PortCount is a remote port + how many established outbound connections
+// from this process target it.
+type PortCount struct {
+	Port  uint32 `json:"port"`
+	Count int    `json:"count"`
 }
 
 func FormatTS(t time.Time) string {
