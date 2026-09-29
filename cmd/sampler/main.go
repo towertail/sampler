@@ -28,7 +28,9 @@ type options struct {
 	noNet         bool
 	noProc        bool
 	noPorts       bool
+	noHealth      bool
 	topN          int
+	procScanMax   int
 	maxRuntime    time.Duration
 	portsInterval time.Duration
 	portsMax      int
@@ -103,7 +105,9 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
 			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
 			&cli.BoolFlag{Name: "no-ports", Usage: "skip per-process ports collection"},
+			&cli.BoolFlag{Name: "no-health", Usage: "skip host health collection"},
 			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
+			&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax, Usage: "skip the per-process scan above this process count (0 = no limit)"},
 			&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval, Usage: "ports refresh cadence in streaming mode"},
 			&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn, Usage: "max connections enumerated per ports refresh"},
 			&cli.DurationFlag{Name: "max-runtime", Usage: "exit after this duration (streaming modes only; 0 = no limit)"},
@@ -202,7 +206,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Name:  "self-check",
 				Usage: "collect one sample, throw it away, print 'ok'",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					opts := options{}
+					opts := options{procScanMax: collect.DefaultProcScanMax}
 					// self-check skips ports — it's a fast "does this binary run" probe,
 		// not a full collection.
 		opts.noPorts = true
@@ -223,7 +227,9 @@ func metricGatingFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "no-net"},
 		&cli.BoolFlag{Name: "no-proc"},
 		&cli.BoolFlag{Name: "no-ports"},
+		&cli.BoolFlag{Name: "no-health"},
 		&cli.IntFlag{Name: "top-n", Value: 20},
+		&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax},
 		&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval},
 		&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn},
 	}
@@ -235,7 +241,9 @@ func gatingFromCmd(c *cli.Command) options {
 		noNet:         c.Bool("no-net"),
 		noProc:        c.Bool("no-proc"),
 		noPorts:       c.Bool("no-ports"),
+		noHealth:      c.Bool("no-health"),
 		topN:          c.Int("top-n"),
+		procScanMax:   c.Int("proc-scan-max"),
 		portsInterval: c.Duration("ports-interval"),
 		portsMax:      c.Int("ports-max"),
 	}
@@ -250,7 +258,7 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 		return nil
 	}
 	if c.Bool("self-check") {
-		opts := options{}
+		opts := options{procScanMax: collect.DefaultProcScanMax}
 		// self-check skips ports — it's a fast "does this binary run" probe,
 		// not a full collection.
 		opts.noPorts = true
@@ -265,7 +273,9 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 		noNet:         c.Bool("no-net"),
 		noProc:        c.Bool("no-proc"),
 		noPorts:       c.Bool("no-ports"),
+		noHealth:      c.Bool("no-health"),
 		topN:          c.Int("top-n"),
+		procScanMax:   c.Int("proc-scan-max"),
 		maxRuntime:    c.Duration("max-runtime"),
 		portsInterval: c.Duration("ports-interval"),
 		portsMax:      c.Int("ports-max"),
@@ -377,8 +387,14 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 		s.Net = &n
 	}
 
+	if !opts.noHealth {
+		h, errs := collect.Health()
+		allErrs = append(allErrs, errs...)
+		s.Health = &h
+	}
+
 	if !opts.noProc {
-		p, errs := collect.Proc(window, opts.topN)
+		p, errs := collect.Proc(window, opts.topN, opts.procScanMax)
 		allErrs = append(allErrs, errs...)
 		s.Procs = &p
 	}

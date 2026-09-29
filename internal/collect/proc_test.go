@@ -8,7 +8,7 @@ import (
 )
 
 func TestProcReturnsItems(t *testing.T) {
-	list, errs := Proc(50*time.Millisecond, 20)
+	list, errs := Proc(50*time.Millisecond, 20, 0)
 	if len(errs) > 0 {
 		t.Logf("non-fatal errors: %v", errs)
 	}
@@ -37,7 +37,7 @@ func TestProcReturnsItems(t *testing.T) {
 func TestProcRespectsTopN(t *testing.T) {
 	// Small cap: visible should be >= cap, items should be <= 2*cap
 	// (union of top-by-CPU and top-by-RSS).
-	list, _ := Proc(50*time.Millisecond, 5)
+	list, _ := Proc(50*time.Millisecond, 5, 0)
 	if list.Total < 5 {
 		t.Skipf("host has only %d procs; test needs >5", list.Total)
 	}
@@ -50,7 +50,7 @@ func TestProcRespectsTopN(t *testing.T) {
 }
 
 func TestProcSortedByCPUDesc(t *testing.T) {
-	list, _ := Proc(50*time.Millisecond, 20)
+	list, _ := Proc(50*time.Millisecond, 20, 0)
 	for i := 1; i < len(list.Items); i++ {
 		if list.Items[i-1].CPUPct < list.Items[i].CPUPct {
 			t.Errorf("items not sorted by CPU desc at %d: %v < %v",
@@ -90,4 +90,17 @@ func TestIsRoot(t *testing.T) {
 	// Don't assert the value (test env varies); just confirm it's callable
 	// and matches the low-level euid check we rely on.
 	_ = IsRoot()
+}
+
+func TestProcSkipsScanAboveMax(t *testing.T) {
+	list, _ := Proc(50*time.Millisecond, 20, 1)
+	if !list.Skipped {
+		t.Fatalf("expected Skipped with scanMax=1, total=%d", list.Total)
+	}
+	if list.Total < 2 {
+		t.Errorf("Total should still be counted, got %d", list.Total)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("Items should be empty when skipped, got %d", len(list.Items))
+	}
 }

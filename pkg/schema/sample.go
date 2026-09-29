@@ -18,7 +18,39 @@ type Sample struct {
 	Net    *NetInfo      `json:"net,omitempty"`
 	Procs  *ProcList     `json:"procs,omitempty"`
 	Ports  *PortList     `json:"ports,omitempty"`
+	Health *HealthInfo   `json:"health,omitempty"`
 	Errors []string      `json:"errors"`
+}
+
+// HealthInfo is a set of cheap host-level health signals. Each field
+// is nil when the OS does not expose it (for example zombies and PSI
+// on Windows, PSI on kernels without CONFIG_PSI).
+type HealthInfo struct {
+	Procs         int            `json:"procs"`
+	Zombies       *int           `json:"zombies,omitempty"`
+	ZombieParents []ZombieParent `json:"zombie_parents,omitempty"`
+	PidsUsed      *int64         `json:"pids_used,omitempty"`
+	PidsMax       *int64         `json:"pids_max,omitempty"`
+	FilesUsed     *int64         `json:"files_used,omitempty"`
+	FilesMax      *int64         `json:"files_max,omitempty"`
+	PSI           *PSIInfo       `json:"psi,omitempty"`
+	MemPressure   *int           `json:"mem_pressure,omitempty"`
+}
+
+// ZombieParent is a process that holds unreaped zombie children.
+type ZombieParent struct {
+	PID   int32  `json:"pid"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// PSIInfo is Linux pressure stall information, avg10 in percent.
+type PSIInfo struct {
+	CPUSome float64 `json:"cpu_some"`
+	MemSome float64 `json:"mem_some"`
+	MemFull float64 `json:"mem_full"`
+	IOSome  float64 `json:"io_some"`
+	IOFull  float64 `json:"io_full"`
 }
 
 // ProcList is the per-process top-N slice plus the meta the Mac app needs to
@@ -26,10 +58,13 @@ type Sample struct {
 // are because the user doesn't have visibility), how many rows were asked
 // for, and the total/visible counts on the host.
 type ProcList struct {
-	Root    bool         `json:"root"`
-	TopN    int          `json:"top_n"`
-	Total   int          `json:"total"`
-	Visible int          `json:"visible"`
+	Root    bool `json:"root"`
+	TopN    int  `json:"top_n"`
+	Total   int  `json:"total"`
+	Visible int  `json:"visible"`
+	// Skipped is true when Total exceeded the scan limit and the
+	// per-process scan did not run. Items is then empty.
+	Skipped bool         `json:"skipped,omitempty"`
 	Items   []ProcSample `json:"items"`
 }
 
@@ -61,24 +96,24 @@ type HostInfo struct {
 	Arch      string `json:"arch"`
 	Kernel    string `json:"kernel"`
 	UptimeS   int64  `json:"uptime_s"`
-	Sampler     string `json:"sampler"`
+	Sampler   string `json:"sampler"`
 	MachineID string `json:"machine_id,omitempty"`
 }
 
 type CPUInfo struct {
-	Pct       float64 `json:"pct"`
-	Load1     float64 `json:"load_1"`
-	Load5     float64 `json:"load_5"`
-	Load15    float64 `json:"load_15"`
-	Cores     int     `json:"cores"`
-	UserMs    int64   `json:"user_ms,omitempty"`
-	SystemMs  int64   `json:"system_ms,omitempty"`
-	IdleMs    int64   `json:"idle_ms,omitempty"`
-	IowaitMs  int64   `json:"iowait_ms,omitempty"`
-	IrqMs     int64   `json:"irq_ms,omitempty"`
-	NiceMs    int64   `json:"nice_ms,omitempty"`
-	StealMs   int64   `json:"steal_ms,omitempty"`
-	TotalMs   int64   `json:"total_ms,omitempty"`
+	Pct      float64 `json:"pct"`
+	Load1    float64 `json:"load_1"`
+	Load5    float64 `json:"load_5"`
+	Load15   float64 `json:"load_15"`
+	Cores    int     `json:"cores"`
+	UserMs   int64   `json:"user_ms,omitempty"`
+	SystemMs int64   `json:"system_ms,omitempty"`
+	IdleMs   int64   `json:"idle_ms,omitempty"`
+	IowaitMs int64   `json:"iowait_ms,omitempty"`
+	IrqMs    int64   `json:"irq_ms,omitempty"`
+	NiceMs   int64   `json:"nice_ms,omitempty"`
+	StealMs  int64   `json:"steal_ms,omitempty"`
+	TotalMs  int64   `json:"total_ms,omitempty"`
 }
 
 type MemInfo struct {
@@ -91,6 +126,9 @@ type DiskSample struct {
 	Fs    string `json:"fs"`
 	Used  int64  `json:"used"`
 	Total int64  `json:"total"`
+	// Inode counts. Omitted when the filesystem reports none (btrfs, NTFS).
+	InodesUsed  int64 `json:"inodes_used,omitempty"`
+	InodesTotal int64 `json:"inodes_total,omitempty"`
 }
 
 type NetInfo struct {
@@ -109,10 +147,10 @@ type NetInfo struct {
 // so one-shot mode produces usable numbers without prior state; zero in
 // streaming mode until the second tick.
 type DiskIOInfo struct {
-	ReadBps  int64             `json:"read_bps"`
-	WriteBps int64             `json:"write_bps"`
-	ReadCum  int64             `json:"read_cum"`
-	WriteCum int64             `json:"write_cum"`
+	ReadBps  int64              `json:"read_bps"`
+	WriteBps int64              `json:"write_bps"`
+	ReadCum  int64              `json:"read_cum"`
+	WriteCum int64              `json:"write_cum"`
 	Devices  []DiskIODeviceInfo `json:"devices,omitempty"`
 }
 
@@ -158,15 +196,15 @@ type PortList struct {
 // most-frequently-seen remote ports for outbound connections (truncated
 // to 5 entries) so the UI can spot "talking to a lot of :443" patterns.
 type PortItem struct {
-	PID            int32        `json:"pid"`
-	Name           string       `json:"name,omitempty"`
-	User           string       `json:"user,omitempty"`
-	ListenTCP      []uint32     `json:"listen_tcp,omitempty"`
-	ListenUDP      []uint32     `json:"listen_udp,omitempty"`
-	EstOut         int          `json:"est_out"`
-	EstIn          int          `json:"est_in"`
-	UDPSockets     int          `json:"udp_sockets,omitempty"`
-	TopRemotePorts []PortCount  `json:"top_remote_ports,omitempty"`
+	PID            int32       `json:"pid"`
+	Name           string      `json:"name,omitempty"`
+	User           string      `json:"user,omitempty"`
+	ListenTCP      []uint32    `json:"listen_tcp,omitempty"`
+	ListenUDP      []uint32    `json:"listen_udp,omitempty"`
+	EstOut         int         `json:"est_out"`
+	EstIn          int         `json:"est_in"`
+	UDPSockets     int         `json:"udp_sockets,omitempty"`
+	TopRemotePorts []PortCount `json:"top_remote_ports,omitempty"`
 }
 
 // PortCount is a remote port + how many established outbound connections

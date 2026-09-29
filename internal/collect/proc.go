@@ -21,16 +21,23 @@ func IsRoot() bool {
 	return isElevated()
 }
 
+// DefaultProcScanMax is the process count above which Proc skips the
+// per-process scan. The scan costs about 0.6 ms per process, so 10k
+// processes take about 6 s, close to the client's 10 s timeout.
+const DefaultProcScanMax = 10000
+
 // Proc enumerates processes and returns the union top-N by CPU% and by RSS,
 // deduped by PID. topN == 0 disables the cap (return everything). The
-// caller should treat 20 as the default.
+// caller should treat 20 as the default. When the host has more than
+// scanMax processes, Proc returns only the count with Skipped set.
+// scanMax <= 0 disables the limit.
 //
 // CPU% requires a short self-sampling window so this function blocks for
 // roughly `window` (same pattern as cpu.Percent). On macOS, non-root
 // processes outside the user's own only return partial info via sysctl
 // kinfo_proc — we surface whatever gopsutil gives us without trying to
 // paper over the gap.
-func Proc(window time.Duration, topN int) (schema.ProcList, []string) {
+func Proc(window time.Duration, topN, scanMax int) (schema.ProcList, []string) {
 	var errs []string
 	list := schema.ProcList{
 		Root: IsRoot(),
@@ -44,6 +51,11 @@ func Proc(window time.Duration, topN int) (schema.ProcList, []string) {
 		return list, errs
 	}
 	list.Total = len(procs)
+	if scanMax > 0 && list.Total > scanMax {
+		list.Skipped = true
+		list.Items = []schema.ProcSample{}
+		return list, errs
+	}
 
 	// Hide the sampler from its own output. If we included ourselves, we'd
 	// always rank at or near the top simply because we're doing CPU work

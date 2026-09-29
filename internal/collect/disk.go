@@ -112,10 +112,12 @@ func Disk() ([]schema.DiskSample, []string) {
 			continue
 		}
 		out = append(out, schema.DiskSample{
-			Mount: p.Mountpoint,
-			Fs:    p.Fstype,
-			Used:  int64(u.Used),
-			Total: int64(u.Total),
+			Mount:       p.Mountpoint,
+			Fs:          p.Fstype,
+			Used:        int64(u.Used),
+			Total:       int64(u.Total),
+			InodesUsed:  int64(u.InodesUsed),
+			InodesTotal: int64(u.InodesTotal),
 		})
 	}
 	return out, errs
