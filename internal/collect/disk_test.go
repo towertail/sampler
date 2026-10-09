@@ -73,3 +73,22 @@ func TestDiskIOCumulativesMonotonic(t *testing.T) {
 		t.Errorf("bps should be non-negative: %+v", io)
 	}
 }
+
+func TestInodeCountsDropsPlaceholders(t *testing.T) {
+	cases := []struct {
+		used, free, total uint64
+		wantUsed, wantTot int64
+	}{
+		{1, 0, 1, 0, 0},         // exFAT / FAT on macOS
+		{0, 0, 0, 0, 0},         // no inode data
+		{500, 0, 500, 500, 500}, // really exhausted
+		{90, 10, 100, 90, 100},  // normal
+	}
+	for _, c := range cases {
+		u, tot := inodeCounts(c.used, c.free, c.total)
+		if u != c.wantUsed || tot != c.wantTot {
+			t.Errorf("inodeCounts(%d,%d,%d) = %d,%d; want %d,%d",
+				c.used, c.free, c.total, u, tot, c.wantUsed, c.wantTot)
+		}
+	}
+}

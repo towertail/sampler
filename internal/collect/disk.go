@@ -111,16 +111,26 @@ func Disk() ([]schema.DiskSample, []string) {
 		if u.Total == 0 {
 			continue
 		}
+		iused, itotal := inodeCounts(u.InodesUsed, u.InodesFree, u.InodesTotal)
 		out = append(out, schema.DiskSample{
 			Mount:       p.Mountpoint,
 			Fs:          p.Fstype,
 			Used:        int64(u.Used),
 			Total:       int64(u.Total),
-			InodesUsed:  int64(u.InodesUsed),
-			InodesTotal: int64(u.InodesTotal),
+			InodesUsed:  iused,
+			InodesTotal: itotal,
 		})
 	}
 	return out, errs
+}
+
+// inodeCounts returns zeros when the filesystem has no inode table.
+// exFAT and FAT report iused=1 ifree=0, which reads as 100% use.
+func inodeCounts(used, free, total uint64) (int64, int64) {
+	if free == 0 && used <= 1 {
+		return 0, 0
+	}
+	return int64(used), int64(total)
 }
 
 // isPartition reports whether `name` names a partition whose parent
