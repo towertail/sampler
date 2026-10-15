@@ -1,0 +1,40 @@
+name: CLA
+
+# Asks each outside contributor to sign the CLA. The signatures of all
+# towertail repos live in towertail/.github, branch cla-signatures.
+on:
+  issue_comment:
+    types: [created]
+  # Runs with secrets, also for PRs from forks.
+  # SECURITY: do not check out or run PR code in this workflow. The action does not do it.
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        if: >-
+          github.event_name == 'pull_request_target' ||
+          (github.event.issue.pull_request &&
+           (github.event.comment.body == 'recheck' ||
+            github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT: contents write on towertail/.github only.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_PAT }}
+        with:
+          path-to-document: https://github.com/towertail/.github/blob/main/CLA.md
+          remote-organization-name: towertail
+          remote-repository-name: .github
+          branch: cla-signatures
+          path-to-signatures: signatures/v1/cla.json
+          allowlist: flarco,dependabot[bot],github-actions[bot]
