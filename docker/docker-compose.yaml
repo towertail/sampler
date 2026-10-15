@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: ghcr.io/towertail/sampler:latest
+    image: towertail-sampler:local
     restart: unless-stopped
     # gopsutil needs visibility into the host's process namespace +
     # network interfaces for accurate process / net counters. Without

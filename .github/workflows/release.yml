@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+    steps:
+      - name: Require signing for a stable tag
+        run: |
+          if [[ "$TAG" != *-* && -z "$MACOS_SIGN_P12" ]]; then
+            echo "::error::$TAG is a stable tag, but the release environment has no MACOS_SIGN_P12. Add the signing secrets, or use a pre-release tag such as $TAG-rc.1."
+            exit 1
+          fi
+          if [[ -z "$MACOS_SIGN_P12" ]]; then
+            echo "::warning::No signing secrets. The darwin binaries are not signed or notarized."
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Write manifest.json
+        run: scripts/manifest.sh dist
+      - name: Check the version
+        run: |
+          set -euo pipefail
+          want="towertail-sampler $(jq -r '.version + "+" + .sha' dist/manifest.json)"
+          got="$(dist/sampler_linux_amd64_v1/towertail-sampler --version)"
+          echo "$got"
+          [[ "$got" == "$want" ]] || { echo "--version prints '$got', want '$want'"; exit 1; }
+          [[ "$TAG" == "v$(jq -r .version dist/manifest.json)" ]] || { echo "manifest version does not match $TAG"; exit 1; }
+      - name: Upload manifest.json and publish the release
+        run: |
+          gh release upload "$TAG" dist/manifest.json --clobber
+          gh release edit "$TAG" --draft=false

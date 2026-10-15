@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: towertail-sampler
+
+builds:
+  - id: sampler
+    main: ./cmd/sampler
+    binary: towertail-sampler
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/towertail/sampler/internal/version.Version={{ .Version }}
+      - -X github.com/towertail/sampler/internal/version.SHA={{ .ShortCommit }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets:
+      - linux_amd64_v1
+      - linux_arm64
+      - linux_arm_7
+      - darwin_amd64_v1
+      - darwin_arm64
+      - windows_amd64_v1
+      - windows_arm64
+
+# Signs and notarizes the darwin binaries with quill. Off when the secrets are not set.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids: [sampler]
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+archives:
+  - formats: [binary]
+    name_template: "towertail-sampler-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github-native
+
+# The release stays a draft. The release workflow adds manifest.json and then publishes it.
+release:
+  draft: true
+  replace_existing_draft: true
+  prerelease: auto
+  extra_files:
+    - glob: testdata/sample-v1.json

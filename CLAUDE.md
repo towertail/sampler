@@ -14,6 +14,7 @@ go test ./...
 go vet ./...
 gofmt -l .                 # must print nothing
 scripts/build.sh           # all 7 triples
+goreleaser check           # release config
 ```
 
 ## Rules

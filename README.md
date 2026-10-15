@@ -49,6 +49,46 @@ go build ./cmd/sampler           # host platform only
 go test ./...
 ```
 
+## Release
+
+GoReleaser ([`.goreleaser.yaml`](.goreleaser.yaml)) and [`.github/workflows/release.yml`](.github/workflows/release.yml) make the release.
+
+1. Make sure that CI on `main` passes.
+2. Tag the commit on `main` and push the tag:
+
+   ```bash
+   git tag v1.2.3
+   git push origin v1.2.3
+   ```
+
+The workflow publishes a GitHub Release with these assets:
+
+- 7 binaries, `towertail-sampler-<triple>` (`.exe` on Windows). The darwin binaries are signed with a Developer ID and notarized.
+- `checksums.txt` (SHA-256 of the binaries).
+- `manifest.json` (`version`, `sha` and the SHA-256 of each binary, after signing).
+- `sample-v1.json` (the wire contract fixture).
+
+A tag with a suffix (for example `v1.2.3-rc.1`) makes a pre-release.
+
+The workflow uses the `release` environment. It needs these secrets:
+
+| Secret | Value |
+|---|---|
+| `MACOS_SIGN_P12` | Base64 of the Developer ID Application `.p12` |
+| `MACOS_SIGN_PASSWORD` | Password of the `.p12` |
+| `MACOS_NOTARY_KEY` | Base64 of the App Store Connect API key (`.p8`) |
+| `MACOS_NOTARY_KEY_ID` | Key ID of the API key |
+| `MACOS_NOTARY_ISSUER_ID` | Issuer ID of the API key |
+
+Without `MACOS_SIGN_P12`, the darwin binaries are not signed. The workflow then accepts only a pre-release tag.
+
+To test the release locally (no signing, no upload):
+
+```bash
+goreleaser release --snapshot --clean
+scripts/manifest.sh dist
+```
+
 ## Wire format
 
 The JSON schema, the flags, and the bootstrap handshake are in [`docs/wire-format.md`](docs/wire-format.md). The Go types are in [`pkg/schema`](pkg/schema).
