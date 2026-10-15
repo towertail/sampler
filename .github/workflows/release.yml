@@ -55,7 +55,44 @@ jobs:
           echo "$got"
           [[ "$got" == "$want" ]] || { echo "--version prints '$got', want '$want'"; exit 1; }
           [[ "$TAG" == "v$(jq -r .version dist/manifest.json)" ]] || { echo "manifest version does not match $TAG"; exit 1; }
-      - name: Upload manifest.json and publish the release
+      - name: Upload manifest.json
+        run: gh release upload "$TAG" dist/manifest.json --clobber
+
+  # Runs the darwin binaries of the draft on macOS. A bad signature makes the kernel kill the process.
+  verify-macos:
+    needs: release
+    runs-on: macos-latest
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check the darwin binaries
         run: |
-          gh release upload "$TAG" dist/manifest.json --clobber
-          gh release edit "$TAG" --draft=false
+          set -euo pipefail
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D bin -p 'towertail-sampler-darwin-*' -p checksums.txt
+          cd bin
+          grep darwin checksums.txt | shasum -a 256 -c -
+          chmod +x towertail-sampler-darwin-*
+          for b in towertail-sampler-darwin-*; do
+            info="$(codesign -dv "$b" 2>&1 || true)"
+            if [[ "$info" == *"TeamIdentifier=Q56WK6TB88"* ]]; then
+              [[ "$info" == *"(runtime)"* ]] || { echo "::error::$b has no hardened runtime."; exit 1; }
+              codesign --verify --strict -vv "$b"
+              spctl -a -t install -vv "$b"
+            elif [[ "$TAG" != *-* ]]; then
+              echo "::error::$b has no Developer ID signature."
+              exit 1
+            fi
+          done
+          arch -arm64 ./towertail-sampler-darwin-arm64 --version
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            arch -x86_64 ./towertail-sampler-darwin-amd64 --version
+          fi
+
+  publish:
+    needs: verify-macos
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - run: gh release edit "${{ github.ref_name }}" -R "$GITHUB_REPOSITORY" --draft=false

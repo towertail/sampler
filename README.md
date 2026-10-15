@@ -74,13 +74,17 @@ The workflow uses the `release` environment. It needs these secrets:
 
 | Secret | Value |
 |---|---|
-| `MACOS_SIGN_P12` | Base64 of the Developer ID Application `.p12` |
+| `MACOS_SIGN_P12` | Base64 of the Developer ID Application `.p12`. It must hold the private key, the certificate, the Developer ID G2 CA and the Apple Root CA. |
 | `MACOS_SIGN_PASSWORD` | Password of the `.p12` |
 | `MACOS_NOTARY_KEY` | Base64 of the App Store Connect API key (`.p8`) |
 | `MACOS_NOTARY_KEY_ID` | Key ID of the API key |
 | `MACOS_NOTARY_ISSUER_ID` | Issuer ID of the API key |
 
 Without `MACOS_SIGN_P12`, the darwin binaries are not signed. The workflow then accepts only a pre-release tag.
+
+quill signs the binaries. It puts the certificate chain of the `.p12` into the signature. If the `.p12` has no full chain, macOS kills the signed binary at start. To add the chain, use `quill p12 attach-chain`, or `openssl pkcs12 -export -legacy` with `-certfile` (the two CA certificates).
+
+The `verify-macos` job runs the darwin binaries of the draft on macOS. It checks the signature, the notarization and `--version`. The `publish` job then publishes the release.
 
 To test the release locally (no signing, no upload):
 
