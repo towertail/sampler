@@ -5,16 +5,26 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/towertail/sampler/internal/version"
 )
 
 func TestRunVersion(t *testing.T) {
-	var out, errb bytes.Buffer
-	code := run([]string{"--version"}, &out, &errb)
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr=%s", code, errb.String())
-	}
-	if !strings.HasPrefix(out.String(), "towertail-sampler ") {
-		t.Errorf("unexpected version output: %q", out.String())
+	oldV, oldSHA := version.Version, version.SHA
+	t.Cleanup(func() { version.Version, version.SHA = oldV, oldSHA })
+	version.Version, version.SHA = "1.2.3", "abc1234"
+
+	const want = "towertail-sampler 1.2.3+abc1234\n"
+	for _, arg := range []string{"--version", "-V", "version"} {
+		t.Run(arg, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			if code := run([]string{arg}, &out, &errb); code != 0 {
+				t.Fatalf("exit = %d, stderr=%s", code, errb.String())
+			}
+			if out.String() != want {
+				t.Errorf("got %q, want %q", out.String(), want)
+			}
+		})
 	}
 }
 

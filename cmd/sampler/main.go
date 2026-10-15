@@ -14,9 +14,9 @@ import (
 
 	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/push"
-	"github.com/towertail/sampler/pkg/schema"
 	"github.com/towertail/sampler/internal/svc"
 	"github.com/towertail/sampler/internal/version"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 type options struct {
@@ -43,9 +43,9 @@ type options struct {
 // busy hosts. Stale-but-present is better than missing — the client
 // reads `collected_ts` to render staleness.
 type portCache struct {
-	last         *schema.PortList
-	lastErrs     []string
-	lastRefresh  time.Time
+	last        *schema.PortList
+	lastErrs    []string
+	lastRefresh time.Time
 }
 
 func (pc *portCache) get(now time.Time, every time.Duration, max int) (*schema.PortList, []string) {
@@ -88,11 +88,12 @@ func (e *exitError) Error() string { return e.msg }
 
 func newCLI(stdout, stderr io.Writer) *cli.Command {
 	return &cli.Command{
-		Name:    "towertail-sampler",
-		Usage:   "Towertail host metrics sampler",
-		Version: fmt.Sprintf("%s %s", version.Version, version.SHA),
-		Writer:  stdout,
-		ErrWriter: stderr,
+		Name:  "towertail-sampler",
+		Usage: "Towertail host metrics sampler",
+		// The custom --version flag below prints the one-line format.
+		HideVersion: true,
+		Writer:      stdout,
+		ErrWriter:   stderr,
 		// Legacy top-level flags — preserved so the Mac-side bootstrap
 		// that invokes `towertail-sampler --version`, `--once`, and
 		// `--self-check` over SSH keeps working untouched.
@@ -198,7 +199,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Name:  "version",
 				Usage: "print version",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					fmt.Fprintf(stdout, "towertail-sampler %s %s\n", version.Version, version.SHA)
+					printVersion(stdout)
 					return nil
 				},
 			},
@@ -208,9 +209,9 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Action: func(ctx context.Context, c *cli.Command) error {
 					opts := options{procScanMax: collect.DefaultProcScanMax}
 					// self-check skips ports — it's a fast "does this binary run" probe,
-		// not a full collection.
-		opts.noPorts = true
-		_ = buildSample(&opts, 50*time.Millisecond, nil)
+					// not a full collection.
+					opts.noPorts = true
+					_ = buildSample(&opts, 50*time.Millisecond, nil)
 					fmt.Fprintln(stdout, "ok")
 					return nil
 				},
@@ -250,11 +251,11 @@ func gatingFromCmd(c *cli.Command) options {
 }
 
 // runRoot dispatches the legacy top-level flag modes. If none match it
-// defaults to --once (matches the docs/sampler.md §3.1 contract).
+// defaults to --once (matches the docs/wire-format.md §3.1 contract).
 func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) error {
 	// --version / --self-check short-circuit even when other flags are set.
 	if c.Bool("version") {
-		fmt.Fprintf(stdout, "towertail-sampler %s %s\n", version.Version, version.SHA)
+		printVersion(stdout)
 		return nil
 	}
 	if c.Bool("self-check") {
@@ -284,6 +285,11 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 		return runStream(ctx, opts, stdout, stderr)
 	}
 	return runOnce(opts, stdout, stderr)
+}
+
+// printVersion writes the same string as host.sampler in a sample.
+func printVersion(w io.Writer) {
+	fmt.Fprintf(w, "towertail-sampler %s\n", version.String())
 }
 
 func runOnce(opts options, stdout, stderr io.Writer) error {

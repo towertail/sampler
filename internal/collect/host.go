@@ -4,15 +4,15 @@ import (
 	"runtime"
 
 	"github.com/shirou/gopsutil/v4/host"
-	"github.com/towertail/sampler/pkg/schema"
 	"github.com/towertail/sampler/internal/version"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 func Host() (schema.HostInfo, []string) {
 	var errs []string
 	h := schema.HostInfo{
-		OS:    runtime.GOOS,
-		Arch:  runtime.GOARCH,
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
 		Sampler: version.String(),
 	}
 	info, err := host.Info()

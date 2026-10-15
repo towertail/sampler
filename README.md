@@ -1,29 +1,56 @@
-# sampler/
+# towertail-sampler
 
-Single-binary Go collector that runs on each monitored server and emits one NDJSON sample per invocation (or per tick in streaming mode).
+`towertail-sampler` is a small Go binary that collects host metrics (CPU, memory, swap, disks, network, processes, ports, and health signals). It writes one JSON sample per run, or one NDJSON line per tick.
 
-Shipped inside the Mac app bundle (five target triples) and pushed to `~/.towertail/sampler` on the remote host on first connect. See [`../docs/sampler.md`](../docs/sampler.md) for the spec, JSON schema, build matrix, and bootstrap handshake.
+The [Towertail](https://github.com/towertail/towertail) desktop apps upload this binary to `~/.towertail/` on each monitored host and run it over SSH. The binary has no runtime dependencies.
 
-## Build
+Supported targets (7 triples): `linux-amd64`, `linux-arm64`, `linux-armv7`, `darwin-amd64`, `darwin-arm64`, `windows-amd64`, `windows-arm64`.
 
+## Install
+
+1. Download the binary for your platform and `checksums.txt` from [GitHub Releases](https://github.com/towertail/sampler/releases).
+2. Check the download:
+
+   ```bash
+   shasum -a 256 -c checksums.txt --ignore-missing
+   ```
+
+3. Make the binary executable and run it:
+
+   ```bash
+   chmod +x towertail-sampler
+   ./towertail-sampler --version
+   ```
+
+## CLI modes
+
+| Mode | Command | Result |
+|---|---|---|
+| once | `towertail-sampler once` or `--once` | Write one JSON sample and exit. This is the default. |
+| stream | `towertail-sampler stream --interval 1s` or `--interval 1s` | Write one NDJSON line per tick until stdin closes. |
+| self-check | `towertail-sampler self-check` or `--self-check` | Collect one sample, discard it, and print `ok`. |
+| version | `towertail-sampler version`, `--version` or `-V` | Print `towertail-sampler <version>+<sha>`. |
+| push (experimental) | `towertail-sampler push --endpoint <url> --token <token>` | Send samples over HTTPS to a Towertail server. |
+| service (experimental) | `towertail-sampler service install ...` | Install push mode as a systemd unit or launchd agent. |
+
+Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip a collector. Run `towertail-sampler --help` for all flags.
+
+The `once`, `stream` and `self-check` modes do not make network calls.
+
+## Build from source
+
+Go 1.24 or later is necessary.
+
+```bash
+scripts/build.sh                 # all 7 triples
+go build ./cmd/sampler           # host platform only
+go test ./...
 ```
-# from repo root
-scripts/build.sampler.sh              # build all 5 targets → dist/samplers/<triple>/
-scripts/build.sampler.sh darwin-arm64 # single target (fast iteration)
-```
 
-## Test
+## Wire format
 
-```
-cd sampler && go test ./...
-```
+The JSON schema, the flags, and the bootstrap handshake are in [`docs/wire-format.md`](docs/wire-format.md). The Go types are in [`pkg/schema`](pkg/schema).
 
-## Run locally
+## License
 
-```
-cd sampler
-go run ./cmd/sampler --once          # emit one JSON sample
-go run ./cmd/sampler --version       # print version
-go run ./cmd/sampler --self-check    # print "ok" if the binary runs
-go run ./cmd/sampler --interval 1s   # stream NDJSON once per second
-```
+Apache-2.0. See [LICENSE](LICENSE).

@@ -1,6 +1,6 @@
-# sampler/docker
+# docker
 
-Run the Towertail sampler as a container. Pairs with the server stack in [`../../server/docker`](../../server/docker).
+Run the Towertail sampler as a container. Pairs with the server stack in [`server/docker`](https://github.com/towertail/towertail/tree/main/server/docker) of the main Towertail repo.
 
 ## Usage
 
