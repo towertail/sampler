@@ -20,7 +20,10 @@
     "system_ms": 500,
     "idle_ms": 8000,
     "iowait_ms": 50,
-    "total_ms": 9550
+    "irq_ms": 10,
+    "nice_ms": 5,
+    "steal_ms": 2,
+    "total_ms": 9567
   },
   "mem": {
     "used": 5814763520,
@@ -31,7 +34,7 @@
     "total": 0
   },
   "disks": [
-    { "mount": "/",     "fs": "ext4", "used": 42949672960, "total": 107374182400 },
+    { "mount": "/",     "fs": "ext4", "used": 42949672960, "total": 107374182400, "inodes_used": 1546048, "inodes_total": 60923904 },
     { "mount": "/data", "fs": "xfs",  "used": 17179869184, "total": 53687091200 }
   ],
   "disk_io": {
@@ -55,9 +58,31 @@
     "total": 312,
     "visible": 311,
     "items": [
-      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "read_bytes": 58720256, "write_bytes": 12582912 },
+      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "start_ts": "2026-04-08T08:31:14.000Z", "read_bytes": 58720256, "write_bytes": 12582912 },
       { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S" }
     ]
+  },
+  "ports": {
+    "root": false,
+    "collected_ts": "2026-04-20T19:42:05.001Z",
+    "max_conn": 2000,
+    "truncated": false,
+    "total": 184,
+    "items": [
+      { "pid": 812, "name": "postgres", "user": "postgres", "listen_tcp": [5432], "est_out": 0, "est_in": 38 },
+      { "pid": 914, "name": "node",     "user": "app",      "listen_tcp": [8080], "listen_udp": [5353], "est_out": 47, "est_in": 12, "udp_sockets": 1, "top_remote_ports": [{ "port": 443, "count": 41 }, { "port": 5432, "count": 6 }] }
+    ]
+  },
+  "health": {
+    "procs": 802,
+    "zombies": 219,
+    "zombie_parents": [{ "pid": 3676542, "name": "sling", "count": 208 }, { "pid": 2013753, "name": "firebolt", "count": 11 }],
+    "pids_used": 6428,
+    "pids_max": 232541,
+    "files_used": 8928,
+    "files_max": 9223372036854775807,
+    "psi": { "cpu_some": 0.01, "mem_some": 0, "mem_full": 0, "io_some": 72.74, "io_full": 66.56 },
+    "mem_pressure": 1
   },
   "errors": []
 }

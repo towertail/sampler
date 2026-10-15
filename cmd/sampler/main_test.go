@@ -3,10 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/version"
+	"github.com/towertail/sampler/internal/wiretest"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -129,5 +132,32 @@ func TestRunDefaultsToOnce(t *testing.T) {
 	var m map[string]any
 	if err := json.Unmarshal(out.Bytes(), &m); err != nil {
 		t.Fatalf("invalid json: %v", err)
+	}
+}
+
+func TestLiveSampleMatchesFixtureKeys(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/sample-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture any
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	want := wiretest.Keys(fixture)
+
+	s := buildSample(&options{noPorts: true, topN: 5, procScanMax: collect.DefaultProcScanMax}, collect.SampleWindow, nil)
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var live any
+	if err := json.Unmarshal(b, &live); err != nil {
+		t.Fatal(err)
+	}
+	for k := range wiretest.Keys(live) {
+		if !want[k] {
+			t.Errorf("live sample key %q is not in testdata/sample-v1.json; update the fixture", k)
+		}
 	}
 }

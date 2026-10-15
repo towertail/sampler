@@ -312,7 +312,8 @@ The build script iterates the seven triples, runs the Go build, and writes `<tri
 - **Go unit tests** in `internal/collect/*_test.go` — deterministic fakes for procfs/sysctl.
 - **Integration** via Docker: `test/linux-amd64.dockerfile` (planned) boots Debian slim, drops a known load, runs `sampler --once`, asserts schema and plausible ranges. Same for Alpine (musl) to catch cgo surprises.
 - **macOS integration** has to run on the dev machine directly (no darwin-in-docker). A simple `go test -tags=integration` with `runtime.GOOS == "darwin"` gates.
-- **Schema contract test** on the Swift side: round-trip decode every `*.json` fixture in `testdata/` into `Sample` struct; fail loudly on unknown fields so protocol drift is caught at build time.
+- **Schema contract test** in Go: `pkg/schema` decodes `testdata/sample-v1.json` with unknown fields disallowed, encodes it again, and checks that each JSON key of the schema types is in the fixture. `cmd/sampler` builds one live sample and checks that each key is in the fixture.
+- **Schema contract test** on the client side: decode the same fixture into the client `Sample` type and fail on unknown fields. Each sampler release ships `sample-v1.json` as an asset for these tests.
 
 ---
 
@@ -320,4 +321,5 @@ The build script iterates the seven triples, runs the Go build, and writes `<tri
 
 - **Sampler version** = semver, injected via `-ldflags "-X github.com/towertail/sampler/internal/version.Version=0.1.0 -X github.com/towertail/sampler/internal/version.SHA=abc1234"`. `--version` prints `towertail-sampler 0.1.0+abc1234`. The `host.sampler` field holds `0.1.0+abc1234`.
 - **Schema version** = top-level `v` integer. Bumped only on breaking changes. The app refuses to parse samples with `v > appKnownV` (future-proof) and gracefully degrades for `v < appKnownV` (backward-compat).
+- **Contract rule.** `testdata/sample-v<N>.json` is the wire contract. A change to `pkg/schema` also updates `testdata/sample-v1.json`; the Go tests fail until the two agree. A breaking change bumps `SchemaVersion` and adds `testdata/sample-v<N>.json`.
 - **Rollout.** When the app ships a new sampler, first-connect triggers bootstrap replace. If the user doesn't open the app for weeks, old sampler keeps running fine — samples still decode. Forced upgrades are never needed for metrics alone; only if the v bumps.

@@ -51,6 +51,8 @@ go test ./...
 
 The JSON schema, the flags, and the bootstrap handshake are in [`docs/wire-format.md`](docs/wire-format.md). The Go types are in [`pkg/schema`](pkg/schema).
 
+Contract rule: [`testdata/sample-v1.json`](testdata/sample-v1.json) is the wire contract. A change to `pkg/schema` also updates the fixture. A breaking change bumps `SchemaVersion` and adds `testdata/sample-v<N>.json`.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
