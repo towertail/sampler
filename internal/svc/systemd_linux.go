@@ -32,7 +32,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart={{.ExecPath}} push --endpoint {{.Endpoint}} --token-file {{.TokenFile}} --interval {{.Interval}}{{if .AllowControl}} --allow-control{{end}}
+ExecStart={{arg .ExecPath}} push --endpoint {{arg .Endpoint}} --token-file {{arg .TokenFile}} --interval {{.Interval}}{{if .AllowControl}} --allow-control{{end}}
 Restart=on-failure
 RestartSec=5
 {{- if .User }}
@@ -40,7 +40,7 @@ User={{.User}}
 {{- end }}
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome={{.ProtectHome}}
 PrivateTmp=yes
 
 [Install]
@@ -55,6 +55,58 @@ type unitCtx struct {
 	User         string
 	AllowControl bool
 	WantedBy     string
+	ProtectHome  string
+}
+
+var unitTmpl = template.Must(template.New("unit").Funcs(template.FuncMap{"arg": unitArg}).Parse(unitTemplate))
+
+// unitArg quotes s for a systemd ExecStart line and escapes "%"
+// specifiers.
+func unitArg(s string) string {
+	s = strings.ReplaceAll(s, "%", "%%")
+	if !strings.ContainsAny(s, " \t\\\"'$;") {
+		return s
+	}
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", "$$")
+	return `"` + r.Replace(s) + `"`
+}
+
+// underHome reports if path is in a directory that ProtectHome=yes
+// hides.
+func underHome(path string) bool {
+	for _, dir := range []string{"/home", "/root", "/run/user"} {
+		if path == dir || strings.HasPrefix(path, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// renderUnit returns the unit file text. A user unit reads its binary
+// and token under $HOME, so it gets ProtectHome=read-only. A system
+// unit gets ProtectHome=yes only if no file it needs is under a home
+// directory.
+func (s *systemd) renderUnit(cfg InstallConfig, tokenFile string) ([]byte, error) {
+	wantedBy := "default.target"
+	protectHome := "read-only"
+	if s.system {
+		wantedBy = "multi-user.target"
+		if !underHome(cfg.ExecPath) && !underHome(tokenFile) {
+			protectHome = "yes"
+		}
+	}
+	var buf bytes.Buffer
+	err := unitTmpl.Execute(&buf, unitCtx{
+		ExecPath:     cfg.ExecPath,
+		Endpoint:     cfg.Endpoint,
+		TokenFile:    tokenFile,
+		Interval:     cfg.Interval.String(),
+		User:         cfg.User,
+		AllowControl: cfg.AllowControl,
+		WantedBy:     wantedBy,
+		ProtectHome:  protectHome,
+	})
+	return buf.Bytes(), err
 }
 
 func (s *systemd) unitPath() (string, error) {
@@ -105,27 +157,14 @@ func (s *systemd) Install(ctx context.Context, cfg InstallConfig) error {
 	if err := os.WriteFile(tokenFile, []byte(cfg.Token+"\n"), 0o600); err != nil {
 		return err
 	}
-	wantedBy := "default.target"
-	if s.system {
-		wantedBy = "multi-user.target"
-	}
-	tmpl := template.Must(template.New("unit").Parse(unitTemplate))
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, unitCtx{
-		ExecPath:     cfg.ExecPath,
-		Endpoint:     cfg.Endpoint,
-		TokenFile:    tokenFile,
-		Interval:     cfg.Interval.String(),
-		User:         cfg.User,
-		AllowControl: cfg.AllowControl,
-		WantedBy:     wantedBy,
-	}); err != nil {
+	unit, err := s.renderUnit(cfg, tokenFile)
+	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(unitPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, unit, 0o644); err != nil {
 		return err
 	}
 	if err := runCmd(ctx, "systemctl", s.systemctlArgs("daemon-reload")...); err != nil {

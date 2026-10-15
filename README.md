@@ -37,6 +37,8 @@ Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip
 
 The `once`, `stream` and `self-check` modes do not make network calls.
 
+Push mode and the `service` command are experimental. Their flags and the server protocol can change in a minor release. Do not use them in production.
+
 ## Build from source
 
 Go 1.24 or later is necessary.

@@ -16,7 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os/exec"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -65,13 +65,7 @@ func Run(ctx context.Context, cfg Config, sampleFn SampleFn, stderr io.Writer) e
 		cfg.Heartbeat = 15 * time.Second
 	}
 
-	client := httpClient(cfg.Insecure)
-	p := &pusher{
-		cfg:    cfg,
-		client: client,
-		ring:   newRing(cfg.Buffer),
-		stderr: stderr,
-	}
+	p := newPusher(cfg, stderr)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -89,11 +83,28 @@ func Run(ctx context.Context, cfg Config, sampleFn SampleFn, stderr io.Writer) e
 	return nil
 }
 
+// authLogEvery limits the auth-rejected log line so a bad token does
+// not fill the journal.
+const authLogEvery = time.Minute
+
 type pusher struct {
 	cfg    Config
 	client *http.Client
 	ring   *ring
 	stderr io.Writer
+
+	now         func() time.Time
+	lastAuthLog time.Time
+}
+
+func newPusher(cfg Config, stderr io.Writer) *pusher {
+	return &pusher{
+		cfg:    cfg,
+		client: httpClient(cfg.Insecure),
+		ring:   newRing(cfg.Buffer),
+		stderr: stderr,
+		now:    time.Now,
+	}
 }
 
 // collect ticks at cfg.Interval and pushes one sample onto the ring.
@@ -173,7 +184,9 @@ func (p *pusher) attemptFlush(ctx context.Context) error {
 		return fmt.Errorf("server %d", resp.StatusCode)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return fmt.Errorf("auth rejected: %d", resp.StatusCode)
+		// A retry cannot fix a bad token, so the batch stays dropped.
+		p.logAuthRejected(resp.StatusCode)
+		return nil
 	}
 	if resp.StatusCode >= 400 {
 		// Schema-rejection etc. — drop to avoid poison loop.
@@ -184,8 +197,19 @@ func (p *pusher) attemptFlush(ctx context.Context) error {
 	return nil
 }
 
+// logAuthRejected writes the auth line at most once per authLogEvery.
+// Only the flush goroutine calls it.
+func (p *pusher) logAuthRejected(status int) {
+	now := p.now()
+	if !p.lastAuthLog.IsZero() && now.Sub(p.lastAuthLog) < authLogEvery {
+		return
+	}
+	p.lastAuthLog = now
+	fmt.Fprintf(p.stderr, "push: auth rejected (HTTP %d); check the token\n", status)
+}
+
 // heartbeat long-polls the control endpoint at cfg.Heartbeat cadence.
-// On a kill_process message, executes /bin/kill.
+// On a kill_process message, it kills the process.
 func (p *pusher) heartbeat(ctx context.Context) {
 	t := time.NewTicker(p.cfg.Heartbeat)
 	defer t.Stop()
@@ -232,10 +256,25 @@ func (p *pusher) pollControl(ctx context.Context) {
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			return
 		}
-		if payload.PID > 0 {
-			_ = exec.Command("/bin/kill", "-9", fmt.Sprintf("%d", payload.PID)).Run()
+		if err := killProcess(int(payload.PID)); err != nil {
+			fmt.Fprintf(p.stderr, "push: kill_process: %v\n", err)
 		}
 	}
+}
+
+// killProcess refuses init and the sampler itself.
+func killProcess(pid int) error {
+	if pid <= 1 {
+		return fmt.Errorf("refuse pid %d", pid)
+	}
+	if pid == os.Getpid() {
+		return fmt.Errorf("refuse own pid %d", pid)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Kill()
 }
 
 func encodeBatch(samples []schema.Sample) ([]byte, error) {

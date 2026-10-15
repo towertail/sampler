@@ -143,7 +143,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			},
 			{
 				Name:  "push",
-				Usage: "collect samples and push to a Towertail server",
+				Usage: "[experimental] collect samples and push to a Towertail server",
 				Flags: append(metricGatingFlags(),
 					&cli.StringFlag{Name: "endpoint", Usage: "server base URL", Required: true, Sources: cli.EnvVars("TOWERTAIL_ENDPOINT")},
 					&cli.StringFlag{Name: "token", Usage: "sampler bearer token", Sources: cli.EnvVars("TOWERTAIL_TOKEN")},
@@ -185,7 +185,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			},
 			{
 				Name:  "service",
-				Usage: "manage the sampler as a background service",
+				Usage: "[experimental] manage the sampler as a background service",
 				Commands: []*cli.Command{
 					{Name: "install", Flags: serviceInstallFlags(), Action: runServiceInstall},
 					{Name: "uninstall", Action: runServiceUninstall},
