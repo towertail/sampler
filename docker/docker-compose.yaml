@@ -1,0 +1,26 @@
+services:
+  sampler:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ghcr.io/towertail/sampler:latest
+    restart: unless-stopped
+    # gopsutil needs visibility into the host's process namespace +
+    # network interfaces for accurate process / net counters. Without
+    # these we only see the container's own view.
+    pid: host
+    network_mode: host
+    # Read-only mount the host root so mountpoint usage reports match
+    # the real host. HOST_PROC and friends point gopsutil at the
+    # bind-mounted procfs; it already understands the env-var convention.
+    volumes:
+      - /:/hostfs:ro
+    environment:
+      TOWERTAIL_ENDPOINT: ${TOWERTAIL_ENDPOINT:?set me}
+      TOWERTAIL_TOKEN: ${TOWERTAIL_TOKEN:?set me}
+      HOST_PROC: /hostfs/proc
+      HOST_SYS: /hostfs/sys
+      HOST_ETC: /hostfs/etc
+      HOST_VAR: /hostfs/var
+      HOST_RUN: /hostfs/run
+    command: ["push","--endpoint","${TOWERTAIL_ENDPOINT}","--interval","30s"]
