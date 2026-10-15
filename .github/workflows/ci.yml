@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt finds unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build all triples
+        run: scripts/build.sh --out "$RUNNER_TEMP/s"
+      - name: Check the build output
+        env:
+          OUT: ${{ runner.temp }}/s
+        run: |
+          set -euo pipefail
+          triples="linux-amd64 linux-arm64 linux-armv7 darwin-arm64 darwin-amd64 windows-amd64 windows-arm64"
+          for t in $triples; do
+            ext=""
+            [[ "$t" == windows-* ]] && ext=".exe"
+            bin="$OUT/$t/towertail-sampler$ext"
+            [[ -f "$bin" ]] || { echo "missing $bin"; exit 1; }
+            want="$(jq -r --arg t "$t" '.binaries[$t]' "$OUT/manifest.json")"
+            got="$(sha256sum "$bin" | awk '{print $1}')"
+            [[ "$want" == "$got" ]] || { echo "sha256 mismatch for $t: manifest $want, file $got"; exit 1; }
+          done
+          n="$(jq '.binaries | length' "$OUT/manifest.json")"
+          [[ "$n" == 7 ]] || { echo "manifest has $n binaries, want 7"; exit 1; }
+          cmp testdata/sample-v1.json "$OUT/sample-v1.json"
+          want="towertail-sampler $(jq -r .version "$OUT/manifest.json")+$(git rev-parse --short=7 HEAD)"
+          got="$("$OUT/linux-amd64/towertail-sampler" --version)"
+          echo "$got"
+          [[ "$got" == "$want" ]] || { echo "--version prints '$got', want '$want'"; exit 1; }
