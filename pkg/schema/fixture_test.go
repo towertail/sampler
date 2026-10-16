@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -63,8 +64,9 @@ func TestFixtureV1(t *testing.T) {
 	}
 }
 
-// schemaKeys returns the key paths that the JSON tags of t declare.
-func schemaKeys(t reflect.Type, prefix string) map[string]bool {
+// schemaKeys returns the key paths that the JSON tags of t declare. A
+// type in itself, as a tree node, gives its keys one time.
+func schemaKeys(t reflect.Type, prefix string, parents ...reflect.Type) map[string]bool {
 	out := map[string]bool{}
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		if t.Kind() == reflect.Slice {
@@ -72,9 +74,10 @@ func schemaKeys(t reflect.Type, prefix string) map[string]bool {
 		}
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Struct {
+	if t.Kind() != reflect.Struct || slices.Contains(parents, t) {
 		return out
 	}
+	parents = append(parents, t)
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -86,7 +89,7 @@ func schemaKeys(t reflect.Type, prefix string) map[string]bool {
 			p = prefix + "." + name
 		}
 		out[p] = true
-		for k := range schemaKeys(f.Type, p) {
+		for k := range schemaKeys(f.Type, p, parents...) {
 			out[k] = true
 		}
 	}

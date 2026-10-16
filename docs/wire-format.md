@@ -47,6 +47,120 @@ Emits one JSON object per tick as newline-delimited JSON (NDJSON) until stdin cl
 
 Used over a persistent SSH channel when the user wants sub-30s updates without per-sample SSH overhead. The Mac app reads NDJSON off stdout and treats each line as an independent `Sample`.
 
+### 3.4 Scan mode
+
+```
+~/.towertail/towertail-sampler scan [--root <dir>] [--max-depth 6] [--min-bytes 50MB] [--min-frac 0.002] [--progress-interval 1s]
+```
+
+Scans the disk usage below a folder. The app starts a scan only when the user asks for one. The scan is read-only: it deletes nothing and writes no files. It writes NDJSON lines on stdout:
+
+1. Zero or more `progress` lines, at most one for each `--progress-interval`.
+2. One last line: `result`, `error` or `cancelled`.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--root <dir>` | home folder | Folder to scan. A leading `~` is the home folder. The sampler resolves symlinks in the root. |
+| `--max-depth <int>` | 6 | Depth of the tree in the result. The walk itself has no depth limit. |
+| `--min-bytes <size>` | `50MB` | A node smaller than this and smaller than `--min-frac` of the root goes into the `other` node of its parent. `KB`, `MB`, `GB`, `TB` are powers of 1000. `KiB`, `MiB`, `GiB`, `TiB` are powers of 1024. |
+| `--min-frac <float>` | 0.002 | See `--min-bytes`. Must be in [0, 1). |
+| `--progress-interval <dur>` | 1s | Time between progress lines. |
+
+**Stop.** The scan stops when stdin closes (EOF), or on SIGTERM or SIGINT. It then writes a `cancelled` line within 500 ms. A caller that does not want to stop the scan must keep stdin open.
+
+**Exit codes.** `0` after a `result` or `cancelled` line. `1` after an `error` line. `2` for a bad flag, also after an `error` line.
+
+**Load.** The scan lowers its own priority first: nice 10 and the idle I/O class on Linux, nice 10 on macOS, and the background mode on Windows. It reads folders with at most 8 goroutines. It does not follow symlinks, and it does not cross into another filesystem. On macOS with `--root /`, it enters the data volume through its firmlinks and skips `/System/Volumes/Data`, so each file counts once. A file with more than one hard link counts once.
+
+**Sizes.** All sizes are allocated bytes (blocks × 512 on Unix, the size rounded up to the cluster size on Windows). A sparse file counts only its used blocks.
+
+#### Lines
+
+Each line has `t` (the line type) and `v` (the scan version, now `1`). The scan version is separate from the sample `v`.
+
+```json
+{"t":"progress","v":1,"files":160478,"dirs":24602,"bytes":44824354816,"no_access_dirs":0,
+ "current":"/home/dev/.npm/_cacache","elapsed_ms":1003,"used_bytes":937903734784,
+ "top":[{"path":"/home/dev/Downloads","b":22908510208}]}
+```
+
+| Key | Meaning |
+|---|---|
+| `files`, `dirs`, `bytes` | Counts so far. |
+| `no_access_dirs` | Number of folders that the scan could not read so far. |
+| `current` | A folder that the scan reads now. |
+| `used_bytes` | Used space of the filesystem that holds the root. `0` when the sampler cannot read it. |
+| `top` | The largest folders directly below the root so far, the largest first. 5 items at most. |
+
+```json
+{"t":"result","v":1,"root":"/home/dev","os":"linux","user":"dev","hostname":"web-1","home":"/home/dev",
+ "started_ts":"2026-10-01T12:00:00.000Z","duration_ms":12340,"files":752559,"dirs":219464,
+ "scanned_bytes":64502427648,
+ "fs":{"mount":"/","total":100000000000,"used":31000000000,"free":69000000000},
+ "no_access":{"dirs":["/root"],"count":1,"bytes_est":null},
+ "tree":{"n":"/home/dev","b":64502427648,"cat":"other","c":[...]},
+ "recs":[...],"errors":[]}
+```
+
+| Key | Meaning |
+|---|---|
+| `root` | The resolved root. |
+| `os` | `linux`, `darwin` or `windows`. The app picks the shell of the cleanup script from it. |
+| `home` | Home folder of the user. `~` in `recs[].path` is this folder. |
+| `scanned_bytes` | Size of all files that the scan read. Equal to `tree.b`. |
+| `fs` | Filesystem that holds the root (the mount point with the longest prefix of the root). `null` when the sampler cannot read it. On macOS `fs.used` is the used space of the whole APFS container. |
+| `no_access.dirs` | Folders that the scan could not read. 50 paths at most. `count` is the full number. |
+| `no_access.bytes_est` | `fs.used − scanned_bytes` when the root is a mount point, else `null`. |
+| `errors` | Problems that did not stop the scan. |
+
+**Tree.** `tree` is the pruned tree. Each node has:
+
+| Key | Meaning |
+|---|---|
+| `n` | Name. The root node has the root path. A node can have more segments joined with the path separator, when the sampler joined a chain of folders that each have one child (`a/b/c`). The root node is never joined. |
+| `b` | Size. For a node with children, `b` is the sum of the children. |
+| `cat` | `code`, `ai`, `cache`, `sdk`, `docs` or `other`. |
+| `id` | Set only on nodes that a recommendation points to. |
+| `f` | `true` for a file. Left out for a folder. |
+| `o` | `true` for the node that holds the small files and folders of its parent. Its name is `other`. Left out for other nodes. |
+| `c` | Children, the largest first, with the `o` node last. Left out when there are none. |
+
+Nodes deeper than `--max-depth` have no children.
+
+**Categories.** A path rule wins (for example `~/.cache` is `cache` and `~/.ollama` is `ai`). Then a folder with a `.git` folder or a project file (`package.json`, `go.mod`, `Cargo.toml` and others) is `code`. Then a node gets the category of its parent. A node with no category of its own whose children are more than half `code` is `code`.
+
+**Recommendations.** `recs` holds the cleanup recommendations, `safe` ones first, the largest first in each group:
+
+```json
+{"id":"npm-cache","group":"safe","label":"npm cache","path":"~/.npm/_cacache","bytes":524288000,
+ "elevated":false,"node_ids":["n6"],
+ "cmd":{"sh":["rm -rf -- \"$HOME/.npm/_cacache\""],"pwsh":[]}}
+```
+
+| Key | Meaning |
+|---|---|
+| `id` | Rule id. Unique in the result: a second hit of the same rule gets `-2`, then `-3`. |
+| `group` | `safe` (the tool makes the data again) or `review` (the user must decide). |
+| `path` | For display only. Starts with `~` (`%USERPROFILE%` on Windows) below the home folder. More than 3 paths show as `a, b +N`. |
+| `elevated` | The commands need `sudo` (Linux, macOS) or an administrator shell (Windows). |
+| `node_ids` | Ids of the tree nodes that the recommendation covers. Can be empty when the nodes were pruned. |
+| `cmd.sh` | Commands for bash or zsh. Filled on Linux and macOS, `[]` on Windows. |
+| `cmd.pwsh` | Commands for PowerShell. Filled on Windows, `[]` on Linux and macOS. |
+
+Each command removes one path from the scan. The sampler quotes each path:
+
+- **sh.** A path below the home folder starts with `"$HOME`. A path with characters other than `A–Z a–z 0–9 . _ / @ % + = : , ~ -` goes in single quotes. A glob stays outside the quotes. Folders use `rm -rf --`. Elevated commands start with `sudo `.
+- **pwsh.** `Remove-Item -LiteralPath "<path>" -Recurse -Force`. A path below the home folder starts with `$env:USERPROFILE`. The sampler escapes `` ` ``, `$`, `"` and the curly double quotes with a backtick. A glob uses `-Path` and `-ErrorAction SilentlyContinue`, and then `[` and `]` in the path are escaped too. Elevated commands end with `  # admin`.
+
+The sampler never recommends a path in or above a path of the never list (trash, Docker data, database data folders, system folders), or a path outside the root. It drops recommendations below 10 MB. The rules are in `internal/scan/<os>_rules.go`.
+
+```json
+{"t":"error","v":1,"message":"lstat /missing: no such file or directory"}
+{"t":"cancelled","v":1}
+```
+
+The fixtures `testdata/scan-linux.ndjson`, `testdata/scan-darwin.ndjson` and `testdata/scan-windows.ndjson` are the contract of the scan lines. Each release has them as assets.
+
 ### 3.3 Control flags
 
 | Flag | Default | Purpose |
@@ -61,7 +175,7 @@ Used over a persistent SSH channel when the user wants sub-30s updates without p
 | `--ports-interval <dur>` | 10s | How often the streaming sampler rebuilds the per-process ports table. Between refreshes the previous snapshot is re-emitted with its `collected_ts` unchanged. Ignored in `--once` mode (always one fresh scan). |
 | `--ports-max <int>` | 2000 | Hard cap on connections collected per refresh (passed straight to gopsutil's `ConnectionsMax`). When hit, `ports.truncated=true`. |
 
-No other flags for v1. No config file. No env vars beyond what Go reads by default.
+The `scan` subcommand has its own flags (§3.4). No other flags for v1. No config file. No env vars beyond what Go reads by default.
 
 ---
 
@@ -266,6 +380,8 @@ Running as the SSH-authenticated **non-root** user:
 
 **If the user later wants root-gated metrics** (per-proc I/O, cross-user visibility on macOS), the path is `sudo setcap cap_sys_ptrace,cap_dac_read_search+ep ~/.towertail/towertail-sampler` on Linux, or invoking the sampler under `sudo` via SSH. The sampler checks euid at startup and widens the `procs` payload automatically.
 
+**Scans.** The `scan` subcommand runs as the SSH user and needs no privilege. Folders that the user cannot read go into `no_access`. On macOS, the app that starts the sampler needs Full Disk Access to read `~/Library/Mail`, `~/Library/Messages` and other protected folders. Without it these folders are in `no_access`. A recommendation with `elevated: true` needs `sudo` or an administrator shell. The sampler never runs these commands: the user copies them.
+
 **Windows permissions.** `IsRoot()` on Windows maps to an **elevated token** (same thing as a process launched from an "Administrator: PowerShell" session). Non-elevated users already see per-process `read_bytes`/`write_bytes` for their own processes via `GetProcessIoCounters`; running elevated extends that to all users' processes and unlocks kernel-protected entries (PID 0, PID 4 System). Aggregate CPU/mem/disk/net need no elevation. The sampler detects elevation via `OpenProcessToken` + `TokenElevation` and surfaces it as `procs.root=true`.
 
 ---
@@ -275,7 +391,7 @@ Running as the SSH-authenticated **non-root** user:
 - **Open-source.** The sampler source is in this repo ([towertail/sampler](https://github.com/towertail/sampler)). Reproducible build: `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/towertail/sampler/internal/version.Version=<semver> -X github.com/towertail/sampler/internal/version.SHA=<sha>" ./cmd/sampler`.
 - **Signing.** The sampler binary itself is unsigned (Linux doesn't care; macOS targets don't check because `scp` doesn't set `com.apple.quarantine`). The Mac **app** is Developer ID signed and notarized, so users trust the binary transitively through the app bundle.
 - **Fingerprint verification.** After scp, the Mac app runs `shasum -a 256 ~/.towertail/towertail-sampler` and compares against the embedded manifest. Mismatch → abort bootstrap, flag as offline with reason "sampler integrity check failed" and log.
-- **No network calls from the sampler** in the `once`, `stream` and `self-check` modes. It reads local counters and writes stdout. It does not resolve DNS, open sockets outbound, or contact any server.
+- **No network calls from the sampler** in the `once`, `stream`, `scan` and `self-check` modes. It reads local counters and writes stdout. It does not resolve DNS, open sockets outbound, or contact any server.
 - **Exception:** the `push` mode (experimental) sends samples over HTTPS to a Towertail server.
 
 ---
@@ -292,12 +408,14 @@ Running as the SSH-authenticated **non-root** user:
 ├── internal/
 │   ├── collect/                 # gopsutil wrappers: cpu, mem, disk, net, host, proc, ports, health
 │   ├── push/                    # push mode (experimental)
+│   ├── scan/                    # scan mode: walker, prune, categories, cleanup rules
 │   ├── svc/                     # service mode: systemd / launchd units (experimental)
 │   └── version/
 │       └── version.go           # ldflags-injected Version + SHA
 ├── pkg/
 │   └── schema/
-│       └── sample.go            # Sample struct + JSON marshaling (public wire contract)
+│       ├── sample.go            # Sample struct + JSON marshaling (public wire contract)
+│       └── scan.go              # scan lines (public wire contract)
 ├── testdata/                    # sample JSON fixtures
 ├── docker/                      # container image for push mode
 └── README.md
@@ -313,7 +431,8 @@ The build script iterates the seven triples, runs the Go build, and writes `<tri
 - **Integration** via Docker: `test/linux-amd64.dockerfile` (planned) boots Debian slim, drops a known load, runs `sampler --once`, asserts schema and plausible ranges. Same for Alpine (musl) to catch cgo surprises.
 - **macOS integration** has to run on the dev machine directly (no darwin-in-docker). A simple `go test -tags=integration` with `runtime.GOOS == "darwin"` gates.
 - **Schema contract test** in Go: `pkg/schema` decodes `testdata/sample-v1.json` with unknown fields disallowed, encodes it again, and checks that each JSON key of the schema types is in the fixture. `cmd/sampler` builds one live sample and checks that each key is in the fixture.
-- **Schema contract test** on the client side: decode the same fixture into the client `Sample` type and fail on unknown fields. Each sampler release ships `sample-v1.json` as an asset for these tests.
+- **Scan contract test.** `internal/scan` makes `testdata/scan-<os>.ndjson` from fake trees (`go test ./internal/scan -run TestGoldenFixtures -update`) and fails when a fixture is out of date. `pkg/schema` decodes each line with unknown fields disallowed and checks that the fixtures hold each key of the scan types. The scan tests also run each `sh` command in bash and each `pwsh` command in PowerShell (when it is installed) with awkward folder names.
+- **Schema contract test** on the client side: decode the same fixture into the client `Sample` type and fail on unknown fields. Each sampler release ships `sample-v1.json` and the `scan-<os>.ndjson` fixtures as assets for these tests.
 
 ---
 
