@@ -97,11 +97,18 @@ var catPaths = map[string]map[string]string{
 // categorize sets the category of each node of the pruned tree. A path
 // rule wins. Then a folder with a project marker is code. Then a folder
 // gets the category of its parent. A folder with no category of its
-// own whose children are more than half code is code too.
+// own whose children are more than half code is code too. The root
+// gets the category of the closest path rule above it, so that a scan
+// of a folder gives the categories of the full scan.
 func (t *Tree) categorize(home string) {
 	paths := map[string]string{}
+	rootCat, best := schema.ScanCatOther, ""
 	for k, v := range catPaths[t.OS] {
-		paths[t.norm(t.expand(k, home))] = v
+		p := t.expand(k, home)
+		paths[t.norm(p)] = v
+		if rel, ok := t.rel(p, t.RootPath); ok && rel != "" && len(p) > len(best) {
+			rootCat, best = v, p
+		}
 	}
 	var walk func(n *node, parent string) (code int64)
 	walk = func(n *node, parent string) int64 {
@@ -135,7 +142,7 @@ func (t *Tree) categorize(home string) {
 		}
 		return code
 	}
-	walk(t.pruned, schema.ScanCatOther)
+	walk(t.pruned, rootCat)
 }
 
 // expand turns a key of catPaths or of a rule into a full path.

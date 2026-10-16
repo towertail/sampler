@@ -20,9 +20,11 @@ import (
 type Config struct {
 	// Root is the folder to scan. Empty means the home folder. A
 	// leading ~ is the home folder.
-	Root             string
-	MaxDepth         int
-	MinBytes         int64
+	Root     string
+	MaxDepth int
+	MinBytes int64
+	// MinFrac is a fraction of the root bytes. 0 sets no fraction
+	// floor. A negative value is the default.
 	MinFrac          float64
 	ProgressInterval time.Duration
 }
@@ -50,7 +52,7 @@ func NewScanner(cfg Config) *Scanner {
 	if cfg.MinBytes <= 0 {
 		cfg.MinBytes = DefaultMinBytes
 	}
-	if cfg.MinFrac <= 0 {
+	if cfg.MinFrac < 0 {
 		cfg.MinFrac = DefaultMinFrac
 	}
 	home, _ := os.UserHomeDir()
@@ -107,7 +109,7 @@ func (s *Scanner) Run(ctx context.Context, progress func(schema.ScanProgress)) (
 // result prunes the tree, finds the recommendations and makes the
 // result line. It does not set the user and the host name.
 func (s *Scanner) result(t *Tree, start time.Time, fsInfo *schema.ScanFS, errs []string) schema.ScanResult {
-	t.Prune(s.cfg.MinBytes, s.cfg.MinFrac, s.cfg.MaxDepth)
+	floor := t.Prune(s.cfg.MinBytes, s.cfg.MinFrac, s.cfg.MaxDepth)
 	t.categorize(s.home)
 	recs := RulesFor(s.os).Apply(t, s.home, start)
 	res := schema.ScanResult{
@@ -126,6 +128,7 @@ func (s *Scanner) result(t *Tree, start time.Time, fsInfo *schema.ScanFS, errs [
 		Tree:         t.Schema(),
 		Recs:         recs,
 		Errors:       errs,
+		Limits:       &schema.ScanLimits{MaxDepth: s.cfg.MaxDepth, MinBytes: floor},
 	}
 	if res.NoAccess.Dirs == nil {
 		res.NoAccess.Dirs = []string{}

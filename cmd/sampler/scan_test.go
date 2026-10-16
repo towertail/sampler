@@ -69,6 +69,32 @@ func TestScanResult(t *testing.T) {
 	if res.Files != 1 || res.Recs == nil || res.Tree.N == "" {
 		t.Errorf("result = %+v", res)
 	}
+	if res.Limits == nil || res.Limits.MaxDepth != 6 || res.Limits.MinBytes < 1 {
+		t.Errorf("limits = %+v", res.Limits)
+	}
+}
+
+func TestScanMinFracZero(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "f"), make([]byte, 5000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	setStdin(t, pr)
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"scan", "--root", root, "--min-bytes", "1KB", "--min-frac", "0", "--max-depth", "2"}, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errb.String())
+	}
+	_, raw := lines(t, out.Bytes())
+	var res schema.ScanResult
+	if err := json.Unmarshal(raw[len(raw)-1], &res); err != nil {
+		t.Fatal(err)
+	}
+	if l := res.Limits; l == nil || l.MaxDepth != 2 || l.MinBytes != 1000 {
+		t.Errorf("limits = %+v, want depth 2 and 1000 bytes", l)
+	}
 }
 
 func TestScanBadFlag(t *testing.T) {

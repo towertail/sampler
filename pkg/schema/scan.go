@@ -83,6 +83,17 @@ type ScanResult struct {
 	Tree         ScanNode     `json:"tree"`
 	Recs         []ScanRec    `json:"recs"`
 	Errors       []string     `json:"errors"`
+	// Limits are the prune limits of this result. A refresh of a
+	// folder uses them to prune the same way.
+	Limits *ScanLimits `json:"limits,omitempty"`
+}
+
+// ScanLimits are the prune limits of a ScanResult.
+type ScanLimits struct {
+	MaxDepth int `json:"max_depth"`
+	// MinBytes is the effective floor: min(min-bytes, min-frac × root
+	// bytes), and 1 at least.
+	MinBytes int64 `json:"min_bytes"`
 }
 
 // ScanFS is the filesystem that holds the root.

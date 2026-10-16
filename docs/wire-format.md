@@ -63,7 +63,7 @@ Scans the disk usage below a folder. The app starts a scan only when the user as
 | `--root <dir>` | home folder | Folder to scan. A leading `~` is the home folder. The sampler resolves symlinks in the root. |
 | `--max-depth <int>` | 6 | Depth of the tree in the result. The walk itself has no depth limit. |
 | `--min-bytes <size>` | `50MB` | A node smaller than this and smaller than `--min-frac` of the root goes into the `other` node of its parent. `KB`, `MB`, `GB`, `TB` are powers of 1000. `KiB`, `MiB`, `GiB`, `TiB` are powers of 1024. |
-| `--min-frac <float>` | 0.002 | See `--min-bytes`. Must be in [0, 1). |
+| `--min-frac <float>` | 0.002 | See `--min-bytes`. Must be in [0, 1). `0` sets no fraction floor: the floor is `--min-bytes`. |
 | `--progress-interval <dur>` | 1s | Time between progress lines. |
 
 **Stop.** The scan stops when stdin closes (EOF), or on SIGTERM or SIGINT. It then writes a `cancelled` line within 500 ms. A caller that does not want to stop the scan must keep stdin open.
@@ -99,7 +99,8 @@ Each line has `t` (the line type) and `v` (the scan version, now `1`). The scan 
  "fs":{"mount":"/","total":100000000000,"used":31000000000,"free":69000000000},
  "no_access":{"dirs":["/root"],"count":1,"bytes_est":null},
  "tree":{"n":"/home/dev","b":64502427648,"cat":"other","c":[...]},
- "recs":[...],"errors":[]}
+ "recs":[...],"errors":[],
+ "limits":{"max_depth":6,"min_bytes":50000000}}
 ```
 
 | Key | Meaning |
@@ -112,6 +113,15 @@ Each line has `t` (the line type) and `v` (the scan version, now `1`). The scan 
 | `no_access.dirs` | Folders that the scan could not read. 50 paths at most. `count` is the full number. |
 | `no_access.bytes_est` | `fs.used − scanned_bytes` when the root is a mount point, else `null`. |
 | `errors` | Problems that did not stop the scan. |
+| `limits` | The prune limits of this result. `max_depth` is `--max-depth`. `min_bytes` is the effective floor: the smaller of `--min-bytes` and `--min-frac` × `tree.b`, and 1 at least. Older samplers leave it out. |
+
+**Refresh of a folder.** To scan one folder again with the limits of an earlier result, the app runs:
+
+```
+scan --root <abs folder> --max-depth <limits.max_depth − depth of folder, min 1> --min-bytes <limits.min_bytes> --min-frac 0
+```
+
+The depth of the folder is its number of path segments below the earlier root. The result then has the same nodes as that folder in a full scan. The app puts the new subtree into the earlier result. Rules use absolute paths, so the scan of a folder finds the recommendations below it. The root of a scan gets the category of the closest path rule above it.
 
 **Tree.** `tree` is the pruned tree. Each node has:
 
@@ -192,7 +202,7 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 | `--allow-disk-scan` | off | Do the `disk_scan` control messages. |
 | `--heartbeat <dur>` | 15s | Time between polls of `GET /v1/control/next`. The sampler polls only when `--allow-control` or `--allow-disk-scan` is on. |
 
-**Disk scans.** On a `disk_scan` message, the sampler starts `towertail-sampler scan` as a subprocess of its own binary, with `--progress-interval 2s` and the `root`, `max_depth` and `min_bytes` of the message. A key with a zero value keeps the default of §3.4. The subprocess lowers its own priority. The push process keeps its priority, and samples continue at the normal interval.
+**Disk scans.** On a `disk_scan` message, the sampler starts `towertail-sampler scan` as a subprocess of its own binary, with `--progress-interval 2s` and the `root`, `max_depth` and `min_bytes` of the message. A key with a zero value keeps the default of §3.4. When the message has `min_frac`, the sampler passes it as `--min-frac`, also when it is `0`. The subprocess lowers its own priority. The push process keeps its priority, and samples continue at the normal interval.
 
 - The sampler runs one scan at a time. It posts an `error` line with `a scan already runs on this host` for a second job.
 - Without `--allow-disk-scan`, the sampler starts no scan. It posts an `error` line with `disk scans are off on this host: run the sampler with --allow-disk-scan`.

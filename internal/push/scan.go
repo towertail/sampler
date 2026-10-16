@@ -95,6 +95,8 @@ type scanJob struct {
 	Root     string `json:"root"`
 	MaxDepth int    `json:"max_depth"`
 	MinBytes int64  `json:"min_bytes"`
+	// MinFrac is nil for the scan default. A refresh sends 0.
+	MinFrac *float64 `json:"min_frac,omitempty"`
 }
 
 // args gives the scan flags. A zero value keeps the scan default.
@@ -108,6 +110,9 @@ func (j scanJob) args() []string {
 	}
 	if j.MinBytes > 0 {
 		args = append(args, "--min-bytes", strconv.FormatInt(j.MinBytes, 10))
+	}
+	if j.MinFrac != nil {
+		args = append(args, "--min-frac", strconv.FormatFloat(*j.MinFrac, 'g', -1, 64))
 	}
 	return args
 }

@@ -57,7 +57,7 @@ func TestPushRunsRealScan(t *testing.T) {
 				return
 			}
 			queued = false
-			fmt.Fprintf(w, `{"id":"m1","kind":"disk_scan","payload":{"job_id":"j1","root":%q,"max_depth":2,"min_bytes":1000}}`, root)
+			fmt.Fprintf(w, `{"id":"m1","kind":"disk_scan","payload":{"job_id":"j1","root":%q,"max_depth":2,"min_bytes":1000,"min_frac":0}}`, root)
 		case "/v1/disk-scans/j1/progress":
 			var l schema.ScanError
 			_ = json.NewDecoder(r.Body).Decode(&l)
@@ -104,6 +104,10 @@ func TestPushRunsRealScan(t *testing.T) {
 	defer mu.Unlock()
 	if result.Files != 1 || result.ScannedBytes < 20000 {
 		t.Errorf("result = %+v", result)
+	}
+	// With min_frac 0, the floor is min_bytes and not a fraction of the root.
+	if l := result.Limits; l == nil || l.MaxDepth != 2 || l.MinBytes != 1000 {
+		t.Errorf("limits = %+v, want depth 2 and 1000 bytes", l)
 	}
 	for _, l := range lines {
 		if l != "progress " {

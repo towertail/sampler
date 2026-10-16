@@ -262,6 +262,21 @@ func TestScanJobFull(t *testing.T) {
 	s.check(t)
 }
 
+func TestScanJobMinFrac(t *testing.T) {
+	msg := `{"id":"m-j1","kind":"disk_scan","payload":{"job_id":"j1","root":"/x/y","max_depth":2,"min_bytes":7000,"min_frac":0}}`
+	s, srv := newScanServer(t, msg)
+	f := &fakeScan{progress: 0, every: time.Millisecond}
+	p, _ := newScanPusher(t, srv.URL, true, f)
+	p.pollControl(context.Background())
+	p.scans.Wait()
+
+	want := "scan --progress-interval 2s --root /x/y --max-depth 2 --min-bytes 7000 --min-frac 0"
+	if got := strings.Join(f.args[0], " "); got != want {
+		t.Errorf("args = %q, want %q", got, want)
+	}
+	s.check(t)
+}
+
 func TestScanCancel(t *testing.T) {
 	s, srv := newScanServer(t, diskScanMsg("j1"))
 	f := &fakeScan{progress: -1, every: time.Millisecond}

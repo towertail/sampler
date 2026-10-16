@@ -120,12 +120,13 @@ func (t *Tree) rollup() {
 }
 
 // Prune makes the pruned tree. A node smaller than both minBytes and
-// minFrac of the root goes into the "other" node of its parent. Nodes
-// deeper than maxDepth have no children.
-func (t *Tree) Prune(minBytes int64, minFrac float64, maxDepth int) {
+// minFrac of the root goes into the "other" node of its parent. A
+// minFrac of 0 sets no fraction floor. Nodes deeper than maxDepth have
+// no children. Prune returns the effective floor.
+func (t *Tree) Prune(minBytes int64, minFrac float64, maxDepth int) int64 {
 	t.rollup()
 	limit := minBytes
-	if f := int64(minFrac * float64(t.Root.bytes)); f < limit {
+	if f := int64(minFrac * float64(t.Root.bytes)); minFrac > 0 && f < limit {
 		limit = f
 	}
 	if limit < 1 {
@@ -133,6 +134,7 @@ func (t *Tree) Prune(minBytes int64, minFrac float64, maxDepth int) {
 	}
 	t.byPath = map[string]*node{}
 	t.pruned = t.pruneDir(t.Root, t.RootPath, limit, maxDepth)
+	return limit
 }
 
 func (t *Tree) pruneDir(d *Dir, path string, limit int64, maxDepth int) *node {
