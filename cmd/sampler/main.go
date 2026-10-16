@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/push"
+	"github.com/towertail/sampler/internal/scan"
 	"github.com/towertail/sampler/internal/svc"
 	"github.com/towertail/sampler/internal/version"
 	"github.com/towertail/sampler/pkg/schema"
@@ -181,6 +183,20 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 					return push.Run(ctx, pcfg, func() schema.Sample {
 						return streamingSample(&opts, pc)
 					}, stderr)
+				},
+			},
+			{
+				Name:  "scan",
+				Usage: "scan the disk usage below a folder and write NDJSON lines",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "root", Usage: "folder to scan (default: home)"},
+					&cli.IntFlag{Name: "max-depth", Value: scan.DefaultMaxDepth, Usage: "depth of the tree in the result"},
+					&cli.StringFlag{Name: "min-bytes", Value: "50MB", Usage: "smallest node in the result, with KB/MB/GB or KiB/MiB/GiB"},
+					&cli.FloatFlag{Name: "min-frac", Value: scan.DefaultMinFrac, Usage: "smallest node in the result, as a fraction of the root"},
+					&cli.DurationFlag{Name: "progress-interval", Value: time.Second, Usage: "time between progress lines"},
+				},
+				Action: func(ctx context.Context, c *cli.Command) error {
+					return runScan(ctx, c, stdout)
 				},
 			},
 			{
@@ -440,6 +456,73 @@ func writeSample(w io.Writer, s schema.Sample) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	return enc.Encode(s)
+}
+
+// stdin is read by the scan command. A scan stops on EOF. Tests set it.
+var stdin io.Reader = os.Stdin
+
+// runScan writes progress lines and then one result, error or cancelled
+// line. The exit code is 0 for a result or cancelled line, 1 for an
+// error line and 2 for a bad flag.
+func runScan(ctx context.Context, c *cli.Command, stdout io.Writer) error {
+	var mu sync.Mutex
+	enc := json.NewEncoder(stdout)
+	enc.SetEscapeHTML(false)
+	write := func(v any) {
+		mu.Lock()
+		defer mu.Unlock()
+		_ = enc.Encode(v)
+	}
+	fail := func(code int, err error) error {
+		write(schema.ScanError{T: schema.ScanLineError, V: schema.ScanVersion, Message: err.Error()})
+		return &exitError{code: code, msg: "scan: " + err.Error()}
+	}
+
+	minBytes, err := scan.ParseSize(c.String("min-bytes"))
+	if err != nil {
+		return fail(2, err)
+	}
+	if f := c.Float("min-frac"); f < 0 || f >= 1 {
+		return fail(2, fmt.Errorf("--min-frac must be in [0, 1)"))
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+	go func() {
+		select {
+		case <-sig:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	go func() {
+		_, _ = io.Copy(io.Discard, stdin)
+		cancel()
+	}()
+
+	if err := scan.LowerPriority(); err != nil {
+		fmt.Fprintln(c.ErrWriter, "scan: lower priority:", err)
+	}
+	s := scan.NewScanner(scan.Config{
+		Root:             c.String("root"),
+		MaxDepth:         c.Int("max-depth"),
+		MinBytes:         minBytes,
+		MinFrac:          c.Float("min-frac"),
+		ProgressInterval: c.Duration("progress-interval"),
+	})
+	res, err := s.Run(ctx, func(p schema.ScanProgress) { write(p) })
+	switch {
+	case err != nil && ctx.Err() != nil:
+		write(schema.ScanCancelled{T: schema.ScanLineCancelled, V: schema.ScanVersion})
+		return nil
+	case err != nil:
+		return fail(1, err)
+	}
+	write(res)
+	return nil
 }
 
 // resolveToken pulls a sampler bearer from --token, then --token-file,

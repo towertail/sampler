@@ -67,6 +67,7 @@ The workflow publishes a GitHub Release with these assets:
 - `checksums.txt` (SHA-256 of the binaries).
 - `manifest.json` (`version`, `sha` and the SHA-256 of each binary, after signing).
 - `sample-v1.json` (the wire contract fixture).
+- `scan-linux.ndjson`, `scan-darwin.ndjson`, `scan-windows.ndjson` (the scan contract fixtures).
 
 A tag with a suffix (for example `v1.2.3-rc.1`) makes a pre-release.
 
@@ -98,6 +99,8 @@ scripts/manifest.sh dist
 The JSON schema, the flags, and the bootstrap handshake are in [`docs/wire-format.md`](docs/wire-format.md). The Go types are in [`pkg/schema`](pkg/schema).
 
 Contract rule: [`testdata/sample-v1.json`](testdata/sample-v1.json) is the wire contract. A change to `pkg/schema` also updates the fixture. A breaking change bumps `SchemaVersion` and adds `testdata/sample-v<N>.json`.
+
+The `testdata/scan-<os>.ndjson` fixtures are the contract of the `scan` subcommand. Make them again with `go test ./internal/scan -run TestGoldenFixtures -update`.
 
 ## License
 

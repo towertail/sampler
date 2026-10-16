@@ -60,3 +60,4 @@ release:
   prerelease: auto
   extra_files:
     - glob: testdata/sample-v1.json
+    - glob: testdata/scan-*.ndjson
