@@ -155,6 +155,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 					&cli.IntFlag{Name: "batch", Value: 10, Usage: "max samples per batch"},
 					&cli.IntFlag{Name: "buffer", Value: 1000, Usage: "ring buffer size"},
 					&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued control messages (kill_process)"},
+					&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans (disk_scan)"},
 					&cli.DurationFlag{Name: "heartbeat", Value: 15 * time.Second, Usage: "control long-poll cadence"},
 					&cli.BoolFlag{Name: "insecure", Usage: "accept self-signed TLS certs"},
 				),
@@ -173,6 +174,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 						BatchSize:     c.Int("batch"),
 						Buffer:        c.Int("buffer"),
 						AllowControl:  c.Bool("allow-control"),
+						AllowDiskScan: c.Bool("allow-disk-scan"),
 						Heartbeat:     c.Duration("heartbeat"),
 						Insecure:      c.Bool("insecure"),
 					}
@@ -559,6 +561,7 @@ func serviceInstallFlags() []cli.Flag {
 		&cli.DurationFlag{Name: "interval", Value: 30 * time.Second},
 		&cli.BoolFlag{Name: "system", Usage: "install as system service instead of per-user"},
 		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued kill_process"},
+		&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans"},
 	}
 }
 
@@ -578,12 +581,13 @@ func runServiceInstall(ctx context.Context, c *cli.Command) error {
 		return err
 	}
 	return m.Install(ctx, svc.InstallConfig{
-		ExecPath:     exe,
-		Endpoint:     c.String("endpoint"),
-		Token:        c.String("token"),
-		User:         c.String("user"),
-		Interval:     c.Duration("interval"),
-		AllowControl: c.Bool("allow-control"),
+		ExecPath:      exe,
+		Endpoint:      c.String("endpoint"),
+		Token:         c.String("token"),
+		User:          c.String("user"),
+		Interval:      c.Duration("interval"),
+		AllowControl:  c.Bool("allow-control"),
+		AllowDiskScan: c.Bool("allow-disk-scan"),
 	})
 }
 

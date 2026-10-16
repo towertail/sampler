@@ -70,6 +70,23 @@ func TestRenderUnit(t *testing.T) {
 	}
 }
 
+func TestRenderUnitAllowFlags(t *testing.T) {
+	s := &systemd{}
+	b, err := s.renderUnit(InstallConfig{
+		ExecPath:      "/usr/local/bin/towertail-sampler",
+		Endpoint:      "https://tt.example",
+		Interval:      30 * time.Second,
+		AllowControl:  true,
+		AllowDiskScan: true,
+	}, "/etc/towertail/sampler.token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "--interval 30s --allow-control --allow-disk-scan\n") {
+		t.Errorf("unit:\n%s", b)
+	}
+}
+
 func TestUnitArgEscapes(t *testing.T) {
 	cases := map[string]string{
 		"/usr/bin/x":      "/usr/bin/x",

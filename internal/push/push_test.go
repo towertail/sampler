@@ -159,7 +159,7 @@ func pollKill(t *testing.T, pid int) string {
 	}))
 	defer srv.Close()
 	stderr := &bytes.Buffer{}
-	p := newPusher(Config{Endpoint: srv.URL, Token: "tok", Buffer: 1}, stderr)
+	p := newPusher(Config{Endpoint: srv.URL, Token: "tok", Buffer: 1, AllowControl: true}, stderr)
 	p.pollControl(context.Background())
 	return stderr.String()
 }

@@ -175,7 +175,31 @@ The fixtures `testdata/scan-linux.ndjson`, `testdata/scan-darwin.ndjson` and `te
 | `--ports-interval <dur>` | 10s | How often the streaming sampler rebuilds the per-process ports table. Between refreshes the previous snapshot is re-emitted with its `collected_ts` unchanged. Ignored in `--once` mode (always one fresh scan). |
 | `--ports-max <int>` | 2000 | Hard cap on connections collected per refresh (passed straight to gopsutil's `ConnectionsMax`). When hit, `ports.truncated=true`. |
 
-The `scan` subcommand has its own flags (§3.4). No other flags for v1. No config file. No env vars beyond what Go reads by default.
+The `scan` subcommand has its own flags (§3.4). The `push` and `service install` subcommands have their own flags (§3.5). No other flags for v1. No config file. No env vars beyond what Go reads by default.
+
+### 3.5 Push mode (experimental)
+
+```
+towertail-sampler push --endpoint <url> --token-file <file> [--allow-control] [--allow-disk-scan]
+towertail-sampler service install --endpoint <url> --token <token> [--system] [--allow-control] [--allow-disk-scan]
+```
+
+Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `service install` writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--allow-control` | off | Do the `kill_process` control messages. |
+| `--allow-disk-scan` | off | Do the `disk_scan` control messages. |
+| `--heartbeat <dur>` | 15s | Time between polls of `GET /v1/control/next`. The sampler polls only when `--allow-control` or `--allow-disk-scan` is on. |
+
+**Disk scans.** On a `disk_scan` message, the sampler starts `towertail-sampler scan` as a subprocess of its own binary, with `--progress-interval 2s` and the `root`, `max_depth` and `min_bytes` of the message. A key with a zero value keeps the default of §3.4. The subprocess lowers its own priority. The push process keeps its priority, and samples continue at the normal interval.
+
+- The sampler runs one scan at a time. It posts an `error` line with `a scan already runs on this host` for a second job.
+- Without `--allow-disk-scan`, the sampler starts no scan. It posts an `error` line with `disk scans are off on this host: run the sampler with --allow-disk-scan`.
+- It posts each `progress`, `error` and `cancelled` line to `POST /v1/disk-scans/{job}/progress`. When the response has `"cancel": true`, or the status is 403 or 404, it closes the stdin of the scan. The scan then writes a `cancelled` line, and the sampler posts it.
+- It gzips the `result` line in memory and sends it with `PUT /v1/disk-scans/{job}/result`. It tries again 3 times after a network error, 429 or 5xx, with 1 s, 2 s and 4 s between the attempts. When the PUT fails, or the gzip body is more than 16 MiB, it posts an `error` line.
+- When the scan stops with no last line, the sampler posts an `error` line.
+- The sampler writes no scan data to disk.
 
 ---
 
@@ -393,6 +417,7 @@ Running as the SSH-authenticated **non-root** user:
 - **Fingerprint verification.** After scp, the Mac app runs `shasum -a 256 ~/.towertail/towertail-sampler` and compares against the embedded manifest. Mismatch → abort bootstrap, flag as offline with reason "sampler integrity check failed" and log.
 - **No network calls from the sampler** in the `once`, `stream`, `scan` and `self-check` modes. It reads local counters and writes stdout. It does not resolve DNS, open sockets outbound, or contact any server.
 - **Exception:** the `push` mode (experimental) sends samples over HTTPS to a Towertail server.
+- **Disk scans in push mode.** A scan result holds file and folder names. The sampler sends it to the server only when both opt-ins are on: the node has `allowDiskScan: true` on the server, and the sampler runs with `--allow-disk-scan`. Both are off by default.
 
 ---
 
@@ -407,7 +432,7 @@ Running as the SSH-authenticated **non-root** user:
 │       └── main.go              # CLI (urfave/cli), mode dispatch, JSON emit
 ├── internal/
 │   ├── collect/                 # gopsutil wrappers: cpu, mem, disk, net, host, proc, ports, health
-│   ├── push/                    # push mode (experimental)
+│   ├── push/                    # push mode and disk scan jobs (experimental)
 │   ├── scan/                    # scan mode: walker, prune, categories, cleanup rules
 │   ├── svc/                     # service mode: systemd / launchd units (experimental)
 │   └── version/

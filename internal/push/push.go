@@ -2,7 +2,7 @@
 // HTTPS. It buffers samples in-memory, flushes them as NDJSON (gzip
 // encoded), and retries with backoff on network / 5xx errors. A
 // concurrent heartbeat goroutine long-polls the control endpoint when
-// AllowControl is true.
+// AllowControl or AllowDiskScan is true.
 package push
 
 import (
@@ -32,8 +32,12 @@ type Config struct {
 	BatchSize     int
 	Buffer        int
 	AllowControl  bool
-	Heartbeat     time.Duration
-	Insecure      bool
+	// AllowDiskScan lets disk_scan control messages start a scan.
+	AllowDiskScan bool
+	// ScanExe is the sampler binary for scans. Empty is this executable.
+	ScanExe   string
+	Heartbeat time.Duration
+	Insecure  bool
 }
 
 // SampleFn produces a fresh Sample. Injected so the sampler can reuse
@@ -65,8 +69,12 @@ func Run(ctx context.Context, cfg Config, sampleFn SampleFn, stderr io.Writer) e
 		cfg.Heartbeat = 15 * time.Second
 	}
 
-	p := newPusher(cfg, stderr)
+	newPusher(cfg, stderr).run(ctx, sampleFn)
+	return nil
+}
 
+// run starts the goroutines and waits for them and for a running scan.
+func (p *pusher) run(ctx context.Context, sampleFn SampleFn) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); p.collect(ctx, sampleFn) }()
@@ -74,13 +82,13 @@ func Run(ctx context.Context, cfg Config, sampleFn SampleFn, stderr io.Writer) e
 	wg.Add(1)
 	go func() { defer wg.Done(); p.flush(ctx) }()
 
-	if cfg.AllowControl {
+	if p.cfg.AllowControl || p.cfg.AllowDiskScan {
 		wg.Add(1)
 		go func() { defer wg.Done(); p.heartbeat(ctx) }()
 	}
 
 	wg.Wait()
-	return nil
+	p.scans.Wait()
 }
 
 // authLogEvery limits the auth-rejected log line so a bad token does
@@ -91,6 +99,7 @@ type pusher struct {
 	cfg    Config
 	client *http.Client
 	ring   *ring
+	scans  *ScanRunner
 	stderr io.Writer
 
 	now         func() time.Time
@@ -98,10 +107,12 @@ type pusher struct {
 }
 
 func newPusher(cfg Config, stderr io.Writer) *pusher {
+	client := httpClient(cfg.Insecure)
 	return &pusher{
 		cfg:    cfg,
-		client: httpClient(cfg.Insecure),
+		client: client,
 		ring:   newRing(cfg.Buffer),
+		scans:  NewScanRunner(cfg, client, ExecScanStarter(cfg.ScanExe, stderr), stderr),
 		stderr: stderr,
 		now:    time.Now,
 	}
@@ -209,7 +220,8 @@ func (p *pusher) logAuthRejected(status int) {
 }
 
 // heartbeat long-polls the control endpoint at cfg.Heartbeat cadence.
-// On a kill_process message, it kills the process.
+// It kills a process on kill_process when AllowControl is true, and
+// gives disk_scan to the ScanRunner.
 func (p *pusher) heartbeat(ctx context.Context) {
 	t := time.NewTicker(p.cfg.Heartbeat)
 	defer t.Stop()
@@ -240,16 +252,20 @@ func (p *pusher) pollControl(ctx context.Context) {
 	if resp.StatusCode >= 300 {
 		return
 	}
-	var msg struct {
-		ID      string          `json:"id"`
-		Kind    string          `json:"kind"`
-		Payload json.RawMessage `json:"payload"`
-	}
+	var msg ControlMessage
 	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
 		return
 	}
 	switch msg.Kind {
+	case "disk_scan":
+		if err := p.scans.Handle(ctx, msg); err != nil {
+			fmt.Fprintf(p.stderr, "push: disk_scan: %v\n", err)
+		}
 	case "kill_process":
+		if !p.cfg.AllowControl {
+			fmt.Fprintln(p.stderr, "push: kill_process: refused, --allow-control is off")
+			return
+		}
 		var payload struct {
 			PID int32 `json:"pid"`
 		}

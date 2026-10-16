@@ -37,6 +37,8 @@ type InstallConfig struct {
 	User         string
 	Interval     time.Duration
 	AllowControl bool
+	// AllowDiskScan adds --allow-disk-scan to the push command.
+	AllowDiskScan bool
 }
 
 // ErrUnsupported is returned by NewManager when the host OS does not

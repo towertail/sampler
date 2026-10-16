@@ -32,7 +32,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart={{arg .ExecPath}} push --endpoint {{arg .Endpoint}} --token-file {{arg .TokenFile}} --interval {{.Interval}}{{if .AllowControl}} --allow-control{{end}}
+ExecStart={{arg .ExecPath}} push --endpoint {{arg .Endpoint}} --token-file {{arg .TokenFile}} --interval {{.Interval}}{{if .AllowControl}} --allow-control{{end}}{{if .AllowDiskScan}} --allow-disk-scan{{end}}
 Restart=on-failure
 RestartSec=5
 {{- if .User }}
@@ -48,14 +48,15 @@ WantedBy={{.WantedBy}}
 `
 
 type unitCtx struct {
-	ExecPath     string
-	Endpoint     string
-	TokenFile    string
-	Interval     string
-	User         string
-	AllowControl bool
-	WantedBy     string
-	ProtectHome  string
+	ExecPath      string
+	Endpoint      string
+	TokenFile     string
+	Interval      string
+	User          string
+	AllowControl  bool
+	AllowDiskScan bool
+	WantedBy      string
+	ProtectHome   string
 }
 
 var unitTmpl = template.Must(template.New("unit").Funcs(template.FuncMap{"arg": unitArg}).Parse(unitTemplate))
@@ -97,14 +98,15 @@ func (s *systemd) renderUnit(cfg InstallConfig, tokenFile string) ([]byte, error
 	}
 	var buf bytes.Buffer
 	err := unitTmpl.Execute(&buf, unitCtx{
-		ExecPath:     cfg.ExecPath,
-		Endpoint:     cfg.Endpoint,
-		TokenFile:    tokenFile,
-		Interval:     cfg.Interval.String(),
-		User:         cfg.User,
-		AllowControl: cfg.AllowControl,
-		WantedBy:     wantedBy,
-		ProtectHome:  protectHome,
+		ExecPath:      cfg.ExecPath,
+		Endpoint:      cfg.Endpoint,
+		TokenFile:     tokenFile,
+		Interval:      cfg.Interval.String(),
+		User:          cfg.User,
+		AllowControl:  cfg.AllowControl,
+		AllowDiskScan: cfg.AllowDiskScan,
+		WantedBy:      wantedBy,
+		ProtectHome:   protectHome,
 	})
 	return buf.Bytes(), err
 }

@@ -70,6 +70,9 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
       {{- if .AllowControl }}
       <string>--allow-control</string>
       {{- end }}
+      {{- if .AllowDiskScan }}
+      <string>--allow-disk-scan</string>
+      {{- end }}
     </array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
@@ -80,13 +83,31 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 type plistCtx struct {
-	Label        string
-	ExecPath     string
-	Endpoint     string
-	TokenFile    string
-	Interval     string
-	LogPath      string
-	AllowControl bool
+	Label         string
+	ExecPath      string
+	Endpoint      string
+	TokenFile     string
+	Interval      string
+	LogPath       string
+	AllowControl  bool
+	AllowDiskScan bool
+}
+
+var plistTmpl = template.Must(template.New("plist").Parse(plistTemplate))
+
+func renderPlist(cfg InstallConfig, tokenFile, logPath string) ([]byte, error) {
+	var buf bytes.Buffer
+	err := plistTmpl.Execute(&buf, plistCtx{
+		Label:         launchdLabel,
+		ExecPath:      cfg.ExecPath,
+		Endpoint:      cfg.Endpoint,
+		TokenFile:     tokenFile,
+		Interval:      cfg.Interval.String(),
+		LogPath:       logPath,
+		AllowControl:  cfg.AllowControl,
+		AllowDiskScan: cfg.AllowDiskScan,
+	})
+	return buf.Bytes(), err
 }
 
 func (l *launchd) Install(ctx context.Context, cfg InstallConfig) error {
@@ -111,23 +132,14 @@ func (l *launchd) Install(ctx context.Context, cfg InstallConfig) error {
 	if err != nil {
 		return err
 	}
-	tmpl := template.Must(template.New("plist").Parse(plistTemplate))
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, plistCtx{
-		Label:        launchdLabel,
-		ExecPath:     cfg.ExecPath,
-		Endpoint:     cfg.Endpoint,
-		TokenFile:    tokenFile,
-		Interval:     cfg.Interval.String(),
-		LogPath:      logPath,
-		AllowControl: cfg.AllowControl,
-	}); err != nil {
+	body, err := renderPlist(cfg, tokenFile, logPath)
+	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(plist, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(plist, body, 0o644); err != nil {
 		return err
 	}
 	if err := runCmd(ctx, "launchctl", "load", "-w", plist); err != nil {

@@ -37,6 +37,8 @@ Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip
 
 The `once`, `stream` and `self-check` modes do not make network calls.
 
+Push mode does control messages from the server only with an opt-in flag. `--allow-control` lets the server kill a process. `--allow-disk-scan` lets the server start a disk scan, and the sampler then sends the scan result to the server. `service install` takes the same flags.
+
 Push mode and the `service` command are experimental. Their flags and the server protocol can change in a minor release. Do not use them in production.
 
 ## Build from source
