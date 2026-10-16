@@ -162,7 +162,8 @@ func (s *Scanner) root() (string, error) {
 // filesystem returns the filesystem that holds root: the mount point
 // with the longest prefix of root.
 func (s *Scanner) filesystem(root string) (*schema.ScanFS, error) {
-	parts, err := disk.Partitions(false)
+	// All partitions, so that an overlay root in a container counts.
+	parts, err := disk.Partitions(true)
 	if err != nil {
 		return nil, fmt.Errorf("disk.Partitions: %w", err)
 	}
