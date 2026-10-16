@@ -4,7 +4,8 @@
 # Usage: scripts/build.sh [--out DIR] [triple ...]
 #   No triple builds all 7. DIR defaults to dist in the repo root.
 #
-# Output: DIR/<triple>/towertail-sampler[.exe], DIR/manifest.json, DIR/sample-v1.json.
+# Output: DIR/<triple>/towertail-sampler[.exe], DIR/manifest.json, DIR/sample-v1.json,
+# DIR/scan-<os>.ndjson.
 # The manifest lists all binaries in DIR, also the ones from earlier builds.
 #
 # Env:
@@ -173,3 +174,5 @@ echo "manifest: $MANIFEST"
 
 cp "$REPO_ROOT/testdata/sample-v1.json" "$OUT_DIR/sample-v1.json"
 echo "fixture: $OUT_DIR/sample-v1.json"
+cp "$REPO_ROOT"/testdata/scan-*.ndjson "$OUT_DIR/"
+echo "fixtures: $OUT_DIR/scan-*.ndjson"
