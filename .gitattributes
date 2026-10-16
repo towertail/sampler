@@ -1,0 +1,2 @@
+testdata/*.ndjson -text
+testdata/*.json -text
