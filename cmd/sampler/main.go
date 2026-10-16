@@ -498,8 +498,9 @@ func runScan(ctx context.Context, c *cli.Command, stdout io.Writer) error {
 		case <-ctx.Done():
 		}
 	}()
+	in := stdin
 	go func() {
-		_, _ = io.Copy(io.Discard, stdin)
+		_, _ = io.Copy(io.Discard, in)
 		cancel()
 	}()
 
