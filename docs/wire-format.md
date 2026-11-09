@@ -290,7 +290,9 @@ One JSON object per sample. Newline-delimited in streaming mode. Fields are stab
     "pids_max": 232541,
     "files_used": 8928,
     "files_max": 9223372036854775807,
-    "psi": { "cpu_some": 0.01, "mem_some": 0, "mem_full": 0, "io_some": 72.74, "io_full": 66.56 }
+    "psi": { "cpu_some": 0.01, "mem_some": 0, "mem_full": 0, "io_some": 72.74, "io_full": 66.56 },
+    "mem_pressure": 1,
+    "mem_pressure_pct": 58
   },
   "errors": []
 }
@@ -319,6 +321,7 @@ One JSON object per sample. Newline-delimited in streaming mode. Fields are stab
   - `files_used` / `files_max`: open file handles against the system limit. Linux `/proc/sys/fs/file-nr`, macOS `kern.num_files` / `kern.maxfiles`.
   - `psi`: Linux pressure stall information, `avg10` in percent: the share of the last 10 s in which some (`*_some`) or all (`*_full`) non-idle tasks waited for CPU, memory, or I/O. Omitted when `/proc/pressure` is absent (kernel < 4.20 or `psi=0`).
   - `mem_pressure`: macOS `kern.memorystatus_vm_pressure_level`: `1` normal, `2` warn, `4` critical.
+  - `mem_pressure_pct`: macOS only. The share of memory in use as the kernel memory status sees it: `100 − kern.memorystatus_level`. `kern.memorystatus_level` is the "System-wide memory free percentage" that the `memory_pressure` tool shows. The value is an integer from 0 to 100. A higher value is worse. The field is omitted when the sysctl is not available. Clients compare it with the memory pressure threshold. Use `mem_pressure` only when this field is missing.
 - **`procs.items[].read_bytes` / `write_bytes`**: lifetime cumulative per-process disk I/O in bytes. Only present when the sampler can read the counters. **Linux** reads `/proc/<pid>/io`, which is mode 0400 and requires either owning the process or `CAP_SYS_PTRACE` (grant once via `sudo setcap cap_sys_ptrace+ep ~/.towertail/towertail-sampler`); rows without the capability omit both fields. **Windows** uses `GetProcessIoCounters`, which the owning user can call by default — per-proc I/O is populated for the sampler's own user out of the box, and for all users when the sampler runs elevated. **macOS** does not surface per-process I/O via any API gopsutil supports today, so both fields are always omitted there. Clients distinguish `null` (no visibility) from `0` (truly no I/O since start).
 - **`ports`**: per-process aggregate of open sockets. Refreshed every `--ports-interval` (default 10s) in streaming mode and re-emitted unchanged in between — `collected_ts` is the wall-clock when the snapshot was actually built and lets the client render staleness. Omitted when `--no-ports` is set. `root` mirrors `procs.root` (matters because non-root on Linux can see system-wide listeners but PIDs for *other users'* sockets come back as 0). `total` is the number of connections gopsutil returned; `truncated=true` when `max_conn` was hit and some connections are not represented. Each `items[]` row is one PID: `listen_tcp` / `listen_udp` are sorted, deduped local ports the process is listening on, `est_out` / `est_in` count outbound vs inbound ESTABLISHED TCP connections (inbound = peer connected to one of our listeners; outbound = we connected to a peer), `udp_sockets` counts UDP sockets without a peer (UDP is connectionless — this is "how many open UDP ports this process holds"), `top_remote_ports` is the most-frequent remote ports for outbound connections capped at 5 entries (so the UI can spot "talking to a lot of :443" patterns). Listening sockets and processes with no sockets are skipped — empty `items[]` is normal on a quiet host. Aggregating server-side keeps the wire payload bounded (≤50 rows in practice) regardless of connection count.
 

@@ -128,3 +128,21 @@ func TestFormatTSIsUTCWithMillis(t *testing.T) {
 		t.Errorf("FormatTS non-UTC = %q", got)
 	}
 }
+
+func TestMemPressurePctJSON(t *testing.T) {
+	b, err := json.Marshal(HealthInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "mem_pressure_pct") {
+		t.Errorf("nil field gives a key: %s", b)
+	}
+	zero := 0
+	b, err = json.Marshal(HealthInfo{MemPressurePct: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"mem_pressure_pct":0`) {
+		t.Errorf("pointer to 0 gives no key: %s", b)
+	}
+}

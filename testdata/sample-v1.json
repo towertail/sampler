@@ -82,7 +82,8 @@
     "files_used": 8928,
     "files_max": 9223372036854775807,
     "psi": { "cpu_some": 0.01, "mem_some": 0, "mem_full": 0, "io_some": 72.74, "io_full": 66.56 },
-    "mem_pressure": 1
+    "mem_pressure": 1,
+    "mem_pressure_pct": 58
   },
   "errors": []
 }

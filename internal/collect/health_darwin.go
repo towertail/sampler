@@ -49,5 +49,10 @@ func healthPlatform(h *schema.HealthInfo) []string {
 		lvl := int(v)
 		h.MemPressure = &lvl
 	}
+	// kern.memorystatus_level is the free memory percentage. The "memory_pressure" tool shows the same value.
+	if v, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil {
+		p := memPressurePct(v)
+		h.MemPressurePct = &p
+	}
 	return errs
 }

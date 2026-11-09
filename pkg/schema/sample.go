@@ -26,15 +26,16 @@ type Sample struct {
 // is nil when the OS does not expose it (for example zombies and PSI
 // on Windows, PSI on kernels without CONFIG_PSI).
 type HealthInfo struct {
-	Procs         int            `json:"procs"`
-	Zombies       *int           `json:"zombies,omitempty"`
-	ZombieParents []ZombieParent `json:"zombie_parents,omitempty"`
-	PidsUsed      *int64         `json:"pids_used,omitempty"`
-	PidsMax       *int64         `json:"pids_max,omitempty"`
-	FilesUsed     *int64         `json:"files_used,omitempty"`
-	FilesMax      *int64         `json:"files_max,omitempty"`
-	PSI           *PSIInfo       `json:"psi,omitempty"`
-	MemPressure   *int           `json:"mem_pressure,omitempty"`
+	Procs          int            `json:"procs"`
+	Zombies        *int           `json:"zombies,omitempty"`
+	ZombieParents  []ZombieParent `json:"zombie_parents,omitempty"`
+	PidsUsed       *int64         `json:"pids_used,omitempty"`
+	PidsMax        *int64         `json:"pids_max,omitempty"`
+	FilesUsed      *int64         `json:"files_used,omitempty"`
+	FilesMax       *int64         `json:"files_max,omitempty"`
+	PSI            *PSIInfo       `json:"psi,omitempty"`
+	MemPressure    *int           `json:"mem_pressure,omitempty"`
+	MemPressurePct *int           `json:"mem_pressure_pct,omitempty"`
 }
 
 // ZombieParent is a process that holds unreaped zombie children.

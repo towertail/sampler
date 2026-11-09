@@ -18,6 +18,15 @@ func Health() (schema.HealthInfo, []string) {
 	return h, errs
 }
 
+// memPressurePct returns the share of memory in use, 0…100, from the
+// free memory percentage of the kernel.
+func memPressurePct(freePct uint32) int {
+	if freePct >= 100 {
+		return 0
+	}
+	return 100 - int(freePct)
+}
+
 // procEntry is the minimum per-process data the health pass needs.
 type procEntry struct {
 	pid    int32
