@@ -1,8 +1,11 @@
 package collect
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
@@ -38,73 +41,145 @@ var excludedFS = map[string]bool{
 	"hugetlbfs":     true,
 }
 
-func isReadOnly(opts []string) bool {
+func hasOpt(opts []string, name string) bool {
 	for _, o := range opts {
-		if o == "ro" || o == "read-only" {
+		if o == name {
 			return true
 		}
 	}
 	return false
 }
 
-func Disk() ([]schema.DiskSample, []string) {
-	var errs []string
-	parts, err := disk.Partitions(false)
-	if err != nil {
-		errs = append(errs, "disk.Partitions: "+err.Error())
-		return nil, errs
-	}
+func isReadOnly(opts []string) bool {
+	return hasOpt(opts, "ro") || hasOpt(opts, "read-only")
+}
 
+const (
+	statfsTimeout = 1 * time.Second
+	diskBudget    = 5 * time.Second
+)
+
+var (
+	errStatfsTimeout = errors.New("statfs timeout")
+	errStatfsPending = errors.New("statfs pending")
+)
+
+type statfsFunc func(path string) (*disk.UsageStat, error)
+
+// Paths with a statfs call that has not returned. A blocked call keeps its
+// goroutine, so one call for each path is the most that can leak.
+var (
+	pendingMu    sync.Mutex
+	pendingPaths = map[string]bool{}
+)
+
+func usageWithTimeout(path string, limit time.Duration, statfs statfsFunc) (*disk.UsageStat, error) {
+	pendingMu.Lock()
+	if pendingPaths[path] {
+		pendingMu.Unlock()
+		return nil, errStatfsPending
+	}
+	pendingPaths[path] = true
+	pendingMu.Unlock()
+
+	type result struct {
+		u   *disk.UsageStat
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		u, err := statfs(path)
+		pendingMu.Lock()
+		delete(pendingPaths, path)
+		pendingMu.Unlock()
+		ch <- result{u, err}
+	}()
+
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case r := <-ch:
+		return r.u, r.err
+	case <-timer.C:
+		return nil, errStatfsTimeout
+	}
+}
+
+func skipPartition(p disk.PartitionStat) bool {
+	// Windows returns empty-mountpoint entries for removable drives
+	// with no media. disk.Usage on an empty path errors on every poll.
+	if p.Mountpoint == "" {
+		return true
+	}
+	fs := strings.ToLower(p.Fstype)
+	if excludedFS[fs] {
+		return true
+	}
+	// OrbStack mounts one NFS share for each Docker volume and image.
+	if strings.HasPrefix(p.Device, "OrbStack:") {
+		return true
+	}
+	if fs == "nfs" && (hasOpt(p.Opts, "automounted") || hasOpt(p.Opts, "nobrowse")) {
+		return true
+	}
+	// Skip nullfs/snap-like overlay paths that sneak through.
+	if strings.HasPrefix(p.Mountpoint, "/snap/") {
+		return true
+	}
+	// macOS has many synthetic firmlink volumes under /System/Volumes/.
+	// /System/Volumes/Data reports the same stats as "/", so skip it too.
+	if strings.HasPrefix(p.Mountpoint, "/System/Volumes/") {
+		return true
+	}
+	// Read-only mounts are mostly DMGs and installer images. They report
+	// 100% full by design and pin the "worst disk" metric. The macOS root
+	// is read-only and sealed, so keep "/".
+	if isReadOnly(p.Opts) && p.Mountpoint != "/" {
+		return true
+	}
+	// DMG-style mounts can land under user temp dirs without the ro flag.
+	return strings.Contains(p.Mountpoint, "/var/folders/")
+}
+
+func Disk() ([]schema.DiskSample, []string) {
+	parts, err := partitions()
+	if err != nil {
+		return nil, []string{"disk.Partitions: " + err.Error()}
+	}
+	return collectDisks(parts, disk.Usage, diskBudget)
+}
+
+func collectDisks(parts []disk.PartitionStat, statfs statfsFunc, budget time.Duration) ([]schema.DiskSample, []string) {
+	var errs []string
 	out := make([]schema.DiskSample, 0, len(parts))
 	seen := make(map[string]bool)
+	deadline := time.Now().Add(budget)
 
+	var mounts []disk.PartitionStat
 	for _, p := range parts {
-		// Windows returns empty-mountpoint entries for removable drives
-		// with no media (empty DVD bays, unmapped SD readers). disk.Usage
-		// on an empty path errors with "system cannot find path specified"
-		// and floods errors[] on every poll. Skip cheaply.
-		if p.Mountpoint == "" {
-			continue
-		}
-		fs := strings.ToLower(p.Fstype)
-		if excludedFS[fs] {
-			continue
-		}
-		// Skip nullfs/snap-like overlay paths that sneak through.
-		if strings.HasPrefix(p.Mountpoint, "/snap/") {
-			continue
-		}
-		// macOS has many synthetic firmlink volumes under /System/Volumes/.
-		// Only /System/Volumes/Data is a real user-facing disk on APFS,
-		// but it reports identical stats to "/" so we skip it too —
-		// the user only cares about one row for the root volume.
-		if strings.HasPrefix(p.Mountpoint, "/System/Volumes/") {
-			continue
-		}
-		// Read-only mounts are almost always app-bundle DMGs, installer
-		// images, or snap-style overlays that report 100% full by design
-		// (they're sized exactly to their contents). Including them makes
-		// the "worst disk" metric permanently pinned at 100% whenever any
-		// such image is mounted. The actual root filesystem on macOS is
-		// also `ro` + `sealed`, but we already pick up the writable
-		// /System/Volumes/Data equivalent via its own entry — except we
-		// skip /System/Volumes/* above, so allow "/" through even if `ro`.
-		if isReadOnly(p.Opts) && p.Mountpoint != "/" {
-			continue
-		}
-		// DMG-style ephemeral mounts sometimes land under user temp dirs
-		// rather than /Volumes; skip those explicitly in case the ro flag
-		// doesn't surface on some FS drivers.
-		if strings.Contains(p.Mountpoint, "/var/folders/") {
-			continue
-		}
-		if seen[p.Mountpoint] {
+		if skipPartition(p) || seen[p.Mountpoint] {
 			continue
 		}
 		seen[p.Mountpoint] = true
+		mounts = append(mounts, p)
+	}
 
-		u, err := disk.Usage(p.Mountpoint)
-		if err != nil {
+	for i, p := range mounts {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			errs = append(errs, fmt.Sprintf("disk: time limit %s reached, %d mounts not read", budget, len(mounts)-i))
+			break
+		}
+		limit := min(statfsTimeout, remaining)
+		u, err := usageWithTimeout(p.Mountpoint, limit, statfs)
+		switch {
+		case errors.Is(err, errStatfsTimeout):
+			errs = append(errs, fmt.Sprintf("disk.Usage(%s): no result in %s, mount skipped", p.Mountpoint, limit))
+			continue
+		case errors.Is(err, errStatfsPending):
+			errs = append(errs, "disk.Usage("+p.Mountpoint+"): earlier statfs still blocked, mount skipped")
+			continue
+		case err != nil:
 			errs = append(errs, "disk.Usage("+p.Mountpoint+"): "+err.Error())
 			continue
 		}
