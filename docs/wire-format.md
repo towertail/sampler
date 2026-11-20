@@ -10,18 +10,28 @@ This document replaces the earlier `probe.sh` design in [`PLAN.md`](https://gith
 
 **Goals.** One uniform sample schema across Linux / macOS / BSD; single round-trip per poll; sub-10MB static binary; no host-side dependencies beyond the binary itself; runs fine as the SSH-authenticated non-root user for the metrics Towertail needs (CPU, mem, disk, net, top-N processes).
 
-**Non-goals for v1.** Root-only collectors that require kernel capabilities the SSH user doesn't have: per-process **I/O** counters across all users, per-process open-fd enumeration across all users, disk SMART, temperature. No on-host daemon, no systemd unit, no listening socket. No plugin system. No metric aggregation on the host — the Mac app decimates and stores.
+**Non-goals for v1.** Root-only collectors that require kernel capabilities the SSH user doesn't have: per-process **I/O** counters across all users, per-process open-fd enumeration across all users, disk SMART, temperature. No listening socket. No plugin system. No metric aggregation on the host — the Mac app decimates and stores.
 
 ---
 
 ## 2. Binary name & location
 
 - **Binary name:** `towertail-sampler`
-- **Install path on remote:** `~/.towertail/towertail-sampler` (symlink or direct)
+- **Install path on remote:** `~/.towertail/bin/towertail-sampler`. The app or `scripts/install.sh` puts it there. The app bootstrap in §6 still uses the old path `~/.towertail/towertail-sampler` until the app changes.
 - **Version/metadata file:** `~/.towertail/towertail-sampler.version` — one line, the SHA-256 of the binary the app uploaded.
-- **Working dir on invocation:** `$HOME` — no files written.
+- **Working dir on invocation:** `$HOME`.
 
-The sampler never writes files on the host. All state lives on the Mac side.
+The `--once`, `stream`, `scan` and `push` modes write no file. The background mode (`start`, §3.5) keeps these files under `~/.towertail/`:
+
+| File | Use |
+| --- | --- |
+| `bin/towertail-sampler` | The binary. |
+| `sampler.lock` | `flock` while the process runs. |
+| `sampler.pid` | The pid of the process. |
+| `sampler.log`, `sampler.log.1` | The log. Each file has 5 MB at most, and there is one old file. |
+| `sampler.json` | The saved start config. It has no token. Mode 0600. |
+| `sampler.token` | The sampler token. Mode 0600. |
+| `sampler.state.json` | The result of the last push, written by the running process. Mode 0600. |
 
 ---
 
@@ -185,22 +195,48 @@ The fixtures `testdata/scan-linux.ndjson`, `testdata/scan-darwin.ndjson` and `te
 | `--ports-interval <dur>` | 10s | How often the streaming sampler rebuilds the per-process ports table. Between refreshes the previous snapshot is re-emitted with its `collected_ts` unchanged. Ignored in `--once` mode (always one fresh scan). |
 | `--ports-max <int>` | 2000 | Hard cap on connections collected per refresh (passed straight to gopsutil's `ConnectionsMax`). When hit, `ports.truncated=true`. |
 
-The `scan` subcommand has its own flags (§3.4). The `push` and `service install` subcommands have their own flags (§3.5). No other flags for v1. No config file. No env vars beyond what Go reads by default.
+The `scan` subcommand has its own flags (§3.4). The `push`, `start` and `service install` subcommands have their own flags (§3.5). No other flags for v1. The `start` command saves its flags in `sampler.json` (§2). The other modes read no config file. No env vars beyond what Go reads by default.
 
 ### 3.5 Push mode (experimental)
 
 ```
 towertail-sampler push --endpoint <url> --token-file <file> [--allow-control] [--allow-disk-scan]
+towertail-sampler start --endpoint <url> --token-file - [--allow-control] [--allow-disk-scan] [--boot auto|linger|launchagent|cron|none]
+towertail-sampler start | stop | status
 towertail-sampler service install --endpoint <url> --token <token> [--system] [--allow-control] [--allow-disk-scan]
 ```
 
-Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `service install` writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags.
+Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `push` runs in the foreground and stops when its session closes. `start` runs the same loop in the background (see "Background mode" below). `service install` is deprecated: use `start`. It writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags.
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--allow-control` | off | Do the `kill_process` control messages. |
 | `--allow-disk-scan` | off | Do the `disk_scan` control messages. |
 | `--heartbeat <dur>` | 15s | Time between polls of `GET /v1/control/next`. The sampler polls only when `--allow-control` or `--allow-disk-scan` is on. |
+
+**Background mode.** `start` keeps the sampler running with no sudo and no service setup. It works on Linux and macOS. On Windows, `start`, `stop` and `boot` print `unsupported on windows` and exit with code 2.
+
+- `start` with `--endpoint` and `--token-file` saves the config (`sampler.json`) and the token (`sampler.token`, mode 0600). `--token-file -` reads one line from stdin. The token is never in argv. `start` with no flag reads the saved files. With no saved config it exits with code 2 and the message `not set up: run start with --endpoint and --token-file`.
+- `--boot` sets the entry that starts the sampler after a reboot. The default is the saved value, else `auto`. A failure prints a warning and the start goes on.
+- `start` takes the lock `sampler.lock` in a new session with no stdio, and writes the pid. It prints `started, pid N`. When a process holds the lock, it prints `already running, pid N` and exits with code 0. `--foreground` runs the loop in the same process.
+- The process writes `sampler.log` and `sampler.state.json`. On SIGTERM or SIGINT it does a final flush, removes the pid file and exits.
+- `stop` sends SIGTERM and waits 10 s for the lock to be free. Then it sends SIGKILL. It prints `stopped` or `not running`. When the reboot entry is a cron entry, the next cron run starts the sampler again.
+- `status` prints one JSON line and exits with code 0, also when the sampler does not run. `running` comes from the lock.
+
+| Field | Meaning |
+|---|---|
+| `running` | `true` when a process holds the lock. |
+| `pid` | The pid of the process. `0` when it does not run. |
+| `version` | The version of the process (`<semver>+<sha>`). When it does not run, the version of this binary. |
+| `endpoint` | The server URL. |
+| `last_push` | The time (UTC) of the last accepted push. `null` when there is none. |
+| `last_status` | The HTTP status of the last push. `0` for a network error. |
+| `last_error` | The error of the last push. Empty when it worked. |
+| `update` | The version that the server asked for. Empty when there is none. |
+| `interval` | The sample interval now, for example `5s`. |
+| `paused_until` | The end of a 402 pause. `null` when there is none. |
+| `gone` | The reason of a 410. Empty when there is none. |
+| `reboot` | The reboot entry that works: `linger`, `launchagent`, `launchagent+cron`, `cron` or `none`. |
 
 **Disk scans.** On a `disk_scan` message, the sampler starts `towertail-sampler scan` as a subprocess of its own binary, with `--progress-interval 2s` and the `root`, `max_depth` and `min_bytes` of the message. A key with a zero value keeps the default of §3.4. When the message has `min_frac`, the sampler passes it as `--min-frac`, also when it is `0`. The subprocess lowers its own priority. The push process keeps its priority, and samples continue at the normal interval.
 
@@ -429,7 +465,8 @@ Running as the SSH-authenticated **non-root** user:
 - **Signing.** The sampler binary itself is unsigned (Linux doesn't care; macOS targets don't check because `scp` doesn't set `com.apple.quarantine`). The Mac **app** is Developer ID signed and notarized, so users trust the binary transitively through the app bundle.
 - **Fingerprint verification.** After scp, the Mac app runs `shasum -a 256 ~/.towertail/towertail-sampler` and compares against the embedded manifest. Mismatch → abort bootstrap, flag as offline with reason "sampler integrity check failed" and log.
 - **No network calls from the sampler** in the `once`, `stream`, `scan` and `self-check` modes. It reads local counters and writes stdout. It does not resolve DNS, open sockets outbound, or contact any server.
-- **Exception:** the `push` mode (experimental) sends samples over HTTPS to a Towertail server.
+- **Exception:** the `push` and `start` modes (experimental) send samples over HTTPS to a Towertail server.
+- **Token.** `sampler.token` has mode 0600. The token comes on stdin (`--token-file -`) or from a file, never in argv.
 - **Disk scans in push mode.** A scan result holds file and folder names. The sampler sends it to the server only when both opt-ins are on: the node has `allowDiskScan: true` on the server, and the sampler runs with `--allow-disk-scan`. Both are off by default.
 
 ---
