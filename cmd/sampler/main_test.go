@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/version"
@@ -159,5 +162,44 @@ func TestLiveSampleMatchesFixtureKeys(t *testing.T) {
 		if !want[k] {
 			t.Errorf("live sample key %q is not in testdata/sample-v1.json; update the fixture", k)
 		}
+	}
+}
+
+func TestResolveTokenStdin(t *testing.T) {
+	resolve := func(in string, args ...string) (string, error) {
+		var tok string
+		var err error
+		cmd := &cli.Command{
+			Name:  "x",
+			Flags: []cli.Flag{&cli.StringFlag{Name: "token"}, &cli.StringFlag{Name: "token-file"}},
+			Action: func(ctx context.Context, c *cli.Command) error {
+				tok, err = resolveToken(c, strings.NewReader(in))
+				return nil
+			},
+		}
+		if rerr := cmd.Run(context.Background(), append([]string{"x"}, args...)); rerr != nil {
+			t.Fatal(rerr)
+		}
+		return tok, err
+	}
+	if tok, err := resolve("tt_abc\nmore\n", "--token-file", "-"); err != nil || tok != "tt_abc" {
+		t.Errorf("stdin token = %q, %v", tok, err)
+	}
+	if _, err := resolve("\n", "--token-file", "-"); err == nil {
+		t.Error("empty line: want an error")
+	}
+	if _, err := resolve("", "--token-file", "-"); err == nil {
+		t.Error("no input: want an error")
+	}
+	if tok, err := resolve("", "--token", "tt_x"); err != nil || tok != "tt_x" {
+		t.Errorf("flag token = %q, %v", tok, err)
+	}
+	if _, err := resolve(""); err == nil {
+		t.Error("no token: want an error")
+	}
+	path := t.TempDir() + "/tok"
+	_ = os.WriteFile(path, []byte("tt_file\n"), 0o600)
+	if tok, err := resolve("", "--token-file", path); err != nil || tok != "tt_file" {
+		t.Errorf("file token = %q, %v", tok, err)
 	}
 }

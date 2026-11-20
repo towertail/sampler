@@ -14,6 +14,7 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/towertail/sampler/internal/collect"
+	"github.com/towertail/sampler/internal/daemon"
 	"github.com/towertail/sampler/internal/push"
 	"github.com/towertail/sampler/internal/scan"
 	"github.com/towertail/sampler/internal/svc"
@@ -162,7 +163,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Action: func(ctx context.Context, c *cli.Command) error {
 					opts := gatingFromCmd(c)
 					opts.interval = c.Duration("interval")
-					token, err := resolveToken(c)
+					token, err := resolveToken(c, stdin)
 					if err != nil {
 						return err
 					}
@@ -177,15 +178,34 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 						AllowDiskScan: c.Bool("allow-disk-scan"),
 						Heartbeat:     c.Duration("heartbeat"),
 						Insecure:      c.Bool("insecure"),
+						UserAgent:     userAgent(),
 					}
 					// Push mode is a long-lived loop too — use a port cache so
 					// the expensive ports collector runs every ports-interval
 					// rather than every sample.
 					pc := &portCache{}
-					return push.Run(ctx, pcfg, func() schema.Sample {
+					return runPush(ctx, pcfg, func() schema.Sample {
 						return streamingSample(&opts, pc)
-					}, stderr)
+					}, daemon.Home{}, nil, stderr)
 				},
+			},
+			{
+				Name:   "start",
+				Usage:  "run the sampler in the background and push to a Towertail server",
+				Flags:  startFlags(),
+				Action: runStart,
+			},
+			{
+				Name:   "stop",
+				Usage:  "stop the background sampler",
+				Flags:  []cli.Flag{homeFlag()},
+				Action: runStop,
+			},
+			{
+				Name:   "status",
+				Usage:  "print the state of the background sampler as one JSON line",
+				Flags:  []cli.Flag{homeFlag()},
+				Action: runStatus,
 			},
 			{
 				Name:  "scan",
@@ -203,7 +223,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			},
 			{
 				Name:  "service",
-				Usage: "[experimental] manage the sampler as a background service",
+				Usage: "[experimental] manage the sampler as a background service (deprecated: use start)",
 				Commands: []*cli.Command{
 					{Name: "install", Flags: serviceInstallFlags(), Action: runServiceInstall},
 					{Name: "uninstall", Action: runServiceUninstall},
@@ -526,29 +546,6 @@ func runScan(ctx context.Context, c *cli.Command, stdout io.Writer) error {
 	}
 	write(res)
 	return nil
-}
-
-// resolveToken pulls a sampler bearer from --token, then --token-file,
-// then TOWERTAIL_TOKEN. Returns an error if none are set.
-func resolveToken(c *cli.Command) (string, error) {
-	if v := c.String("token"); v != "" {
-		return v, nil
-	}
-	if p := c.String("token-file"); p != "" {
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return "", err
-		}
-		return trimNewlines(string(b)), nil
-	}
-	return "", fmt.Errorf("--token or --token-file required (or TOWERTAIL_TOKEN env)")
-}
-
-func trimNewlines(s string) string {
-	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r' || s[len(s)-1] == ' ') {
-		s = s[:len(s)-1]
-	}
-	return s
 }
 
 // -------- service subcommand plumbing --------

@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 // RotatingFile is a log file with one old file. When a write does not
@@ -78,4 +81,15 @@ func (r *RotatingFile) Close() error {
 	err := r.f.Close()
 	r.f = nil
 	return err
+}
+
+// Stamp returns a writer that puts the UTC time before each write. One
+// write is one log line.
+func Stamp(w io.Writer) io.Writer { return stampWriter{w} }
+
+type stampWriter struct{ w io.Writer }
+
+func (s stampWriter) Write(p []byte) (int, error) {
+	_, err := fmt.Fprintf(s.w, "%s %s", time.Now().UTC().Format(time.RFC3339), p)
+	return len(p), err
 }

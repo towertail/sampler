@@ -1,0 +1,364 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/urfave/cli/v3"
+
+	"github.com/towertail/sampler/internal/boot"
+	"github.com/towertail/sampler/internal/collect"
+	"github.com/towertail/sampler/internal/daemon"
+	"github.com/towertail/sampler/internal/push"
+	"github.com/towertail/sampler/internal/version"
+	"github.com/towertail/sampler/pkg/schema"
+)
+
+const (
+	logMax       = 5 << 20
+	stopWait     = 10 * time.Second
+	lockWait     = time.Second
+	defaultEvery = 30 * time.Second
+)
+
+var errUnsupported = &exitError{code: 2, msg: "unsupported on windows"}
+
+// bootDisabler removes the reboot entry. The push loop calls it on 410.
+type bootDisabler interface {
+	Disable(ctx context.Context) error
+}
+
+// bootManager is the reboot entry as the commands use it. *boot.Entry
+// satisfies it. Tests give a fake.
+type bootManager interface {
+	bootDisabler
+	Enable(ctx context.Context, mode string) (string, error)
+	Detect(ctx context.Context) string
+	StartService(ctx context.Context) error
+	StopService(ctx context.Context) error
+}
+
+var (
+	// startWait is the time that start waits for the process to take the lock.
+	startWait = 10 * time.Second
+	// detach starts the sampler process in the background. Tests replace it.
+	detach  = daemon.Detach
+	newBoot = func(h daemon.Home) bootManager { return boot.NewEntry(h, boot.ExecRunner{}) }
+)
+
+func startFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "endpoint", Usage: "server base URL"},
+		&cli.StringFlag{Name: "token-file", Usage: "file with the sampler token, or - for one line of stdin"},
+		&cli.DurationFlag{Name: "interval", Value: defaultEvery, Usage: "sample cadence"},
+		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued control messages (kill_process)"},
+		&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans (disk_scan)"},
+		&cli.BoolFlag{Name: "insecure", Usage: "accept self-signed TLS certs"},
+		&cli.StringFlag{Name: "boot", Usage: "reboot entry: auto, linger, launchagent, cron or none (default: the saved one, else auto)"},
+		&cli.BoolFlag{Name: "foreground", Usage: "run in this process and not in the background"},
+		homeFlag(),
+	}
+}
+
+func homeFlag() cli.Flag {
+	return &cli.StringFlag{Name: "home", Hidden: true, Usage: "sampler folder (default ~/.towertail)"}
+}
+
+// runStart saves the config when flags are given, sets the reboot entry
+// and starts the sampler in the background.
+func runStart(ctx context.Context, c *cli.Command) error {
+	if runtime.GOOS == "windows" {
+		return errUnsupported
+	}
+	h := daemon.NewHome(c.String("home"))
+	cfg, token, err := loadStartConfig(c, h)
+	if err != nil {
+		return err
+	}
+	b := newBoot(h)
+	cfg = ensureBoot(ctx, c, h, b, cfg)
+	if c.Bool("foreground") {
+		return runForeground(ctx, c, h, b, cfg, token)
+	}
+	return startBackground(ctx, c, h, b, cfg)
+}
+
+// loadStartConfig saves the config and the token from the flags. Without
+// flags it loads the saved ones.
+func loadStartConfig(c *cli.Command, h daemon.Home) (daemon.StartConfig, string, error) {
+	saved, savedErr := h.LoadConfig()
+	if !c.IsSet("endpoint") && !c.IsSet("token-file") {
+		token, tokErr := h.LoadToken()
+		if errors.Is(savedErr, os.ErrNotExist) || errors.Is(tokErr, os.ErrNotExist) {
+			return saved, "", &exitError{code: 2, msg: "not set up: run start with --endpoint and --token-file"}
+		}
+		if savedErr != nil {
+			return saved, "", savedErr
+		}
+		return saved, token, tokErr
+	}
+	cfg := daemon.StartConfig{
+		Endpoint:      c.String("endpoint"),
+		Interval:      c.Duration("interval"),
+		AllowControl:  c.Bool("allow-control"),
+		AllowDiskScan: c.Bool("allow-disk-scan"),
+		Insecure:      c.Bool("insecure"),
+	}
+	if savedErr == nil {
+		cfg.Boot = saved.Boot
+		if cfg.Endpoint == "" {
+			cfg.Endpoint = saved.Endpoint
+		}
+	}
+	if cfg.Endpoint == "" {
+		return cfg, "", &exitError{code: 2, msg: "--endpoint required"}
+	}
+	token, err := resolveToken(c, stdin)
+	if err != nil {
+		return cfg, "", &exitError{code: 2, msg: err.Error()}
+	}
+	if err := h.SaveConfig(cfg); err != nil {
+		return cfg, "", err
+	}
+	if err := h.SaveToken(token); err != nil {
+		return cfg, "", err
+	}
+	return cfg, token, nil
+}
+
+// ensureBoot sets the reboot entry when the wanted mode differs from the
+// saved one. A failure prints a warning and the start goes on.
+func ensureBoot(ctx context.Context, c *cli.Command, h daemon.Home, b bootManager, cfg daemon.StartConfig) daemon.StartConfig {
+	want := c.String("boot")
+	if want == "" {
+		want = cfg.Boot
+	}
+	if want == "" {
+		want = "auto"
+	}
+	have := cfg.Boot != "" && cfg.Boot != "none"
+	var (
+		got string
+		err error
+	)
+	switch {
+	case want == "none" && have && c.IsSet("boot"):
+		err = b.Disable(ctx)
+		got = "none"
+	case want != "none" && (!have || want != "auto" && want != cfg.Boot):
+		got, err = b.Enable(ctx, want)
+	default:
+		return cfg
+	}
+	if err != nil {
+		fmt.Fprintf(c.Root().ErrWriter, "warning: reboot entry: %v\n", err)
+		return cfg
+	}
+	cfg.Boot = got
+	if err := h.SaveConfig(cfg); err != nil {
+		fmt.Fprintf(c.Root().ErrWriter, "warning: save config: %v\n", err)
+	}
+	return cfg
+}
+
+func startBackground(ctx context.Context, c *cli.Command, h daemon.Home, b bootManager, cfg daemon.StartConfig) error {
+	if pid, ok := h.Running(); ok {
+		fmt.Fprintf(c.Root().Writer, "already running, pid %d\n", pid)
+		return nil
+	}
+	if strings.Contains(cfg.Boot, "linger") {
+		err := b.StartService(ctx)
+		if err == nil {
+			var pid int
+			if pid, err = h.WaitRunning(startWait); err == nil {
+				fmt.Fprintf(c.Root().Writer, "started, pid %d\n", pid)
+				return nil
+			}
+		}
+		fmt.Fprintf(c.Root().ErrWriter, "warning: systemd start: %v\n", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := []string{"start", "--foreground"}
+	if c.IsSet("home") {
+		args = append(args, "--home", h.Dir)
+	}
+	pid, err := detach(exe, args, h, startWait)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(c.Root().Writer, "started, pid %d\n", pid)
+	return nil
+}
+
+// runForeground holds the lock, writes the pid and the log, and runs the
+// push loop until a signal or an exit order.
+func runForeground(ctx context.Context, c *cli.Command, h daemon.Home, b bootManager, cfg daemon.StartConfig, token string) error {
+	lock, err := h.LockWait(lockWait)
+	if errors.Is(err, daemon.ErrRunning) {
+		pid, _ := h.Running()
+		fmt.Fprintf(c.Root().Writer, "already running, pid %d\n", pid)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	if err := h.WritePID(os.Getpid()); err != nil {
+		return err
+	}
+	defer h.RemovePID()
+	logf, err := daemon.OpenRotating(h.LogPath(), logMax)
+	if err != nil {
+		return err
+	}
+	defer logf.Close()
+	log := daemon.Stamp(logf)
+
+	state := h.StateFile()
+	if err := state.Reset(os.Getpid(), version.String(), cfg.Endpoint); err != nil {
+		fmt.Fprintf(log, "state: %v\n", err)
+	}
+	fmt.Fprintf(log, "start: sampler %s, pid %d\n", version.String(), os.Getpid())
+	if cfg.Interval <= 0 {
+		cfg.Interval = defaultEvery
+	}
+	pcfg := push.Config{
+		Endpoint:      cfg.Endpoint,
+		Token:         token,
+		Interval:      cfg.Interval,
+		AllowControl:  cfg.AllowControl,
+		AllowDiskScan: cfg.AllowDiskScan,
+		Insecure:      cfg.Insecure,
+		Recorder:      state,
+		UserAgent:     userAgent(),
+	}
+	opts := options{
+		topN:          20,
+		procScanMax:   collect.DefaultProcScanMax,
+		portsInterval: collect.DefaultPortsInterval,
+		portsMax:      collect.DefaultPortsMaxConn,
+	}
+	pc := &portCache{}
+	err = runPush(ctx, pcfg, func() schema.Sample { return streamingSample(&opts, pc) }, h, b, log)
+	fmt.Fprintln(log, "stop")
+	return err
+}
+
+func userAgent() string { return "towertail-sampler/" + version.Version }
+
+// runPush is the loop of `push` and `start --foreground`. A SIGTERM or
+// SIGINT stops it after the final flush. On an exit order (410) it
+// removes the reboot entry and the saved config and returns nil.
+func runPush(ctx context.Context, cfg push.Config, sampleFn push.SampleFn, h daemon.Home, b bootDisabler, stderr io.Writer) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := push.Run(ctx, cfg, sampleFn, stderr)
+	var gone *push.GoneError
+	if !errors.As(err, &gone) {
+		return err
+	}
+	fmt.Fprintf(stderr, "cloud asked to exit: %s\n", gone.Reason)
+	if b != nil {
+		if err := b.Disable(context.WithoutCancel(ctx)); err != nil {
+			fmt.Fprintf(stderr, "remove reboot entry: %v\n", err)
+		}
+	}
+	if err := h.Forget(); err != nil {
+		fmt.Fprintf(stderr, "forget config: %v\n", err)
+	}
+	return nil
+}
+
+// runStop stops the running sampler. In linger mode it stops the unit
+// first.
+func runStop(ctx context.Context, c *cli.Command) error {
+	if runtime.GOOS == "windows" {
+		return errUnsupported
+	}
+	h := daemon.NewHome(c.String("home"))
+	if _, ok := h.Running(); !ok {
+		fmt.Fprintln(c.Root().Writer, "not running")
+		return nil
+	}
+	if cfg, err := h.LoadConfig(); err == nil && strings.Contains(cfg.Boot, "linger") {
+		if err := newBoot(h).StopService(ctx); err != nil {
+			fmt.Fprintf(c.Root().ErrWriter, "warning: systemd stop: %v\n", err)
+		}
+	}
+	if _, err := h.Terminate(stopWait); err != nil {
+		return err
+	}
+	fmt.Fprintln(c.Root().Writer, "stopped")
+	return nil
+}
+
+// runStatus prints the state as one JSON line. `running` comes from the
+// lock. It exits 0 also when the sampler does not run.
+func runStatus(ctx context.Context, c *cli.Command) error {
+	h := daemon.NewHome(c.String("home"))
+	st, err := h.StateFile().Read()
+	if err != nil {
+		st = daemon.State{}
+	}
+	pid, running := h.Running()
+	st.PID = pid
+	if !running || st.Version == "" {
+		st.Version = version.String()
+	}
+	st.Reboot = newBoot(h).Detect(ctx)
+	return writeJSON(c.Root().Writer, daemon.Status{Running: running, State: st})
+}
+
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return &exitError{code: 1, msg: err.Error()}
+	}
+	return nil
+}
+
+// resolveToken pulls a sampler bearer from --token, then --token-file
+// (- reads one line of stdin), then TOWERTAIL_TOKEN. It returns an error
+// if none is set or the token is empty.
+func resolveToken(c *cli.Command, stdin io.Reader) (string, error) {
+	if v := c.String("token"); v != "" {
+		return v, nil
+	}
+	p := c.String("token-file")
+	if p == "" {
+		return "", fmt.Errorf("--token or --token-file required (or TOWERTAIL_TOKEN env)")
+	}
+	var raw string
+	if p == "-" {
+		line, err := bufio.NewReader(stdin).ReadString('\n')
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		raw = line
+	} else {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return "", err
+		}
+		raw = string(b)
+	}
+	tok := strings.TrimSpace(raw)
+	if tok == "" {
+		return "", errors.New("empty token")
+	}
+	return tok, nil
+}

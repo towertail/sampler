@@ -3,9 +3,11 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +195,17 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := st.Mode().Perm(); got != want {
 		t.Errorf("%s mode = %o, want %o", filepath.Base(path), got, want)
+	}
+}
+
+func TestStampPrefixesTime(t *testing.T) {
+	var b bytes.Buffer
+	n, err := Stamp(&b).Write([]byte("hello\n"))
+	if err != nil || n != 6 {
+		t.Fatalf("Write = %d, %v", n, err)
+	}
+	ts, rest, ok := strings.Cut(b.String(), " ")
+	if _, perr := time.Parse(time.RFC3339, ts); !ok || perr != nil || rest != "hello\n" {
+		t.Fatalf("line = %q", b.String())
 	}
 }

@@ -73,7 +73,7 @@ func (s *StateFile) PushResult(r push.Result) {
 	st.LastStatus = r.Status
 	st.LastError = r.Err
 	if r.Status >= 200 && r.Status < 300 {
-		at := r.At
+		at := r.At.UTC()
 		st.LastPush = &at
 		st.PausedUntil = nil
 	}
@@ -84,7 +84,7 @@ func (s *StateFile) PushResult(r push.Result) {
 		st.Interval = r.Interval.String()
 	}
 	if !r.PausedUntil.IsZero() {
-		until := r.PausedUntil
+		until := r.PausedUntil.UTC()
 		st.PausedUntil = &until
 	}
 	if r.Gone != "" {
