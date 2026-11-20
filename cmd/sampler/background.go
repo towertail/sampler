@@ -362,3 +362,67 @@ func resolveToken(c *cli.Command, stdin io.Reader) (string, error) {
 	}
 	return tok, nil
 }
+
+func bootCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "boot",
+		Usage: "set, remove or show the entry that starts the sampler after a reboot",
+		Commands: []*cli.Command{
+			{
+				Name:  "enable",
+				Usage: "set the reboot entry",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "mode", Value: "auto", Usage: "auto, linger, launchagent or cron"},
+					homeFlag(),
+				},
+				Action: runBootEnable,
+			},
+			{Name: "disable", Usage: "remove the reboot entry", Flags: []cli.Flag{homeFlag()}, Action: runBootDisable},
+			{Name: "show", Usage: "show the reboot entry that works", Flags: []cli.Flag{homeFlag()}, Action: runBootShow},
+		},
+	}
+}
+
+type rebootLine struct {
+	Reboot string `json:"reboot"`
+}
+
+// bootFail prints the error as a JSON line and returns exit code 1.
+func bootFail(c *cli.Command, err error) error {
+	_ = writeJSON(c.Root().Writer, map[string]string{"error": err.Error()})
+	return &exitError{code: 1, msg: err.Error()}
+}
+
+func runBootEnable(ctx context.Context, c *cli.Command) error {
+	if runtime.GOOS == "windows" {
+		return errUnsupported
+	}
+	h := daemon.NewHome(c.String("home"))
+	got, err := newBoot(h).Enable(ctx, c.String("mode"))
+	if err != nil {
+		return bootFail(c, err)
+	}
+	if err := h.SetBoot(got); err != nil {
+		fmt.Fprintf(c.Root().ErrWriter, "warning: save config: %v\n", err)
+	}
+	return writeJSON(c.Root().Writer, rebootLine{got})
+}
+
+func runBootDisable(ctx context.Context, c *cli.Command) error {
+	if runtime.GOOS == "windows" {
+		return errUnsupported
+	}
+	h := daemon.NewHome(c.String("home"))
+	if err := newBoot(h).Disable(ctx); err != nil {
+		return bootFail(c, err)
+	}
+	if err := h.SetBoot("none"); err != nil {
+		fmt.Fprintf(c.Root().ErrWriter, "warning: save config: %v\n", err)
+	}
+	return writeJSON(c.Root().Writer, rebootLine{"none"})
+}
+
+func runBootShow(ctx context.Context, c *cli.Command) error {
+	h := daemon.NewHome(c.String("home"))
+	return writeJSON(c.Root().Writer, rebootLine{newBoot(h).Detect(ctx)})
+}

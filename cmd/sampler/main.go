@@ -207,6 +207,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Flags:  []cli.Flag{homeFlag()},
 				Action: runStatus,
 			},
+			bootCommand(),
 			{
 				Name:  "scan",
 				Usage: "scan the disk usage below a folder and write NDJSON lines",

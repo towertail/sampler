@@ -261,6 +261,45 @@ func TestStopNotRunning(t *testing.T) {
 	}
 }
 
+func TestBootEnableShowDisable(t *testing.T) {
+	fb := &fakeBoot{enableGot: "cron", detect: "cron"}
+	setBoot(t, fb)
+	dir := newHomeDir(t)
+	h := daemon.NewHome(dir)
+	_ = h.SaveConfig(daemon.StartConfig{Endpoint: "https://x.test", Boot: "none"})
+
+	code, stdout, _ := runArgs("boot", "enable", "--mode", "cron", "--home", dir)
+	if code != 0 || stdout != `{"reboot":"cron"}`+"\n" {
+		t.Fatalf("enable: code = %d, stdout = %q", code, stdout)
+	}
+	if len(fb.enabled) != 1 || fb.enabled[0] != "cron" {
+		t.Fatalf("Enable calls = %v", fb.enabled)
+	}
+	if cfg, _ := h.LoadConfig(); cfg.Boot != "cron" {
+		t.Fatalf("saved boot = %q", cfg.Boot)
+	}
+
+	if code, stdout, _ = runArgs("boot", "show", "--home", dir); code != 0 || stdout != `{"reboot":"cron"}`+"\n" {
+		t.Fatalf("show: code = %d, stdout = %q", code, stdout)
+	}
+
+	code, stdout, _ = runArgs("boot", "disable", "--home", dir)
+	if code != 0 || stdout != `{"reboot":"none"}`+"\n" || fb.disabled != 1 {
+		t.Fatalf("disable: code = %d, stdout = %q", code, stdout)
+	}
+	if cfg, _ := h.LoadConfig(); cfg.Boot != "none" {
+		t.Fatalf("saved boot = %q", cfg.Boot)
+	}
+}
+
+func TestBootEnableErrorLine(t *testing.T) {
+	setBoot(t, &fakeBoot{enableErr: errors.New("no way")})
+	code, stdout, _ := runArgs("boot", "enable", "--home", newHomeDir(t))
+	if code != 1 || stdout != `{"error":"no way"}`+"\n" {
+		t.Fatalf("code = %d, stdout = %q", code, stdout)
+	}
+}
+
 func TestRunPushGoneDisablesBootAndForgets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusGone)

@@ -233,6 +233,13 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 - `--boot` sets the entry that starts the sampler after a reboot. The default is the saved value, else `auto`. A failure prints a warning and the start goes on.
 - `start` takes the lock `sampler.lock` in a new session with no stdio, and writes the pid. It prints `started, pid N`. When a process holds the lock, it prints `already running, pid N` and exits with code 0. `--foreground` runs the loop in the same process.
 - The process writes `sampler.log` and `sampler.state.json`. On SIGTERM or SIGINT it does a final flush, removes the pid file and exits.
+- `boot enable [--mode auto|linger|launchagent|cron]`, `boot disable` and `boot show` set, remove and show the reboot entry. Each prints one JSON line: `{"reboot":"<mode>"}`, or `{"error":"<message>"}` with exit code 1. The app runs `boot enable` over SSH and shows the result. The modes are:
+  - `linger`: a systemd user unit (`~/.config/systemd/user/towertail-sampler.service`, `start --foreground`, `Restart=on-failure`) and `loginctl enable-linger $USER`. In this mode `start` runs `systemctl --user start`, so the process lives in the user manager and not in the SSH session.
+  - `launchagent` (macOS): `~/Library/LaunchAgents/com.towertail.sampler.plist` and `launchctl bootstrap gui/<uid>`, or `user/<uid>` when no user is logged in. It starts at boot only after the user logs in. A Mac with no auto-login also gets the cron lines (`launchagent+cron`).
+  - `cron`: the crontab lines `@reboot` and `*/5 * * * *` with `<bin> start`, marked with `# towertail-sampler`. The lock makes the extra starts do nothing.
+  - `none`: no entry.
+  - `auto`: `linger` and then `cron` on Linux. `launchagent` and then `cron` on macOS. `ErrNoBootMethod` (exit code 1) when none works.
+  - The sampler removes its own entry on a 410 (`boot disable`). It does not turn off linger, because other user services can need it.
 - `stop` sends SIGTERM and waits 10 s for the lock to be free. Then it sends SIGKILL. It prints `stopped` or `not running`. When the reboot entry is a cron entry, the next cron run starts the sampler again.
 - `status` prints one JSON line and exits with code 0, also when the sampler does not run. `running` comes from the lock.
 
