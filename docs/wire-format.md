@@ -214,6 +214,19 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 | `--allow-disk-scan` | off | Do the `disk_scan` control messages. |
 | `--heartbeat <dur>` | 15s | Time between polls of `GET /v1/control/next`. The sampler polls only when `--allow-control` or `--allow-disk-scan` is on. |
 
+**Ingest orders.** The reply to `POST /v1/ingest/samples` can hold orders (`docs/wire.md` §3.0). The request has the header `User-Agent: towertail-sampler/<version>`, with the version of `--version` and no `+<sha>`.
+
+| Reply | The sampler |
+|---|---|
+| 202 with `interval` | Sets the sample interval to that Go duration. A value that is not a duration, or is less than 1 s, is logged and ignored. |
+| 202 with no `interval` (also an empty body) | Sets the interval back to the configured value (`--interval`, default 30 s). |
+| 202 with `update` | Records the version in the state. The sampler does not update itself. |
+| 402 `{"retry_after": N}` | Keeps the batch and sends nothing for N seconds (default 3600, at least 60, at most 24 h). It goes on to sample into the buffer. The buffer drops the oldest samples when it is full. |
+| 410 | Stops. In background mode it also removes the reboot entry, `sampler.json` and `sampler.token`, writes the reason in the state (`gone`), logs `cloud asked to exit: <reason>` and exits with code 0. |
+| 401, 403 | Keeps the batch and tries again with a back-off of 1 s up to 5 min. It never exits. |
+| 5xx, network error | Keeps the batch and tries again with a back-off of 1 s up to 30 s. It honors `Retry-After` of a 5xx reply, up to 5 min. |
+| other 4xx | Drops the batch. |
+
 **Background mode.** `start` keeps the sampler running with no sudo and no service setup. It works on Linux and macOS. On Windows, `start`, `stop` and `boot` print `unsupported on windows` and exit with code 2.
 
 - `start` with `--endpoint` and `--token-file` saves the config (`sampler.json`) and the token (`sampler.token`, mode 0600). `--token-file -` reads one line from stdin. The token is never in argv. `start` with no flag reads the saved files. With no saved config it exits with code 2 and the message `not set up: run start with --endpoint and --token-file`.
