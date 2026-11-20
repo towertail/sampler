@@ -52,14 +52,19 @@ var (
 	// startWait is the time that start waits for the process to take the lock.
 	startWait = 10 * time.Second
 	// detach starts the sampler process in the background. Tests replace it.
-	detach  = daemon.Detach
-	newBoot = func(h daemon.Home) bootManager { return boot.NewEntry(h, boot.ExecRunner{}) }
+	detach = daemon.Detach
+	// joinCall and machineID are replaced in tests.
+	joinCall  = push.Join
+	machineID = collect.MachineID
+	newBoot   = func(h daemon.Home) bootManager { return boot.NewEntry(h, boot.ExecRunner{}) }
 )
 
 func startFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "endpoint", Usage: "server base URL"},
 		&cli.StringFlag{Name: "token-file", Usage: "file with the sampler token, or - for one line of stdin"},
+		&cli.StringFlag{Name: "join", Usage: "one-use join token: trade it for a sampler token"},
+		&cli.StringFlag{Name: "name", Usage: "host name for --join (default: the host name)"},
 		&cli.DurationFlag{Name: "interval", Value: defaultEvery, Usage: "sample cadence"},
 		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued control messages (kill_process)"},
 		&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans (disk_scan)"},
@@ -81,7 +86,7 @@ func runStart(ctx context.Context, c *cli.Command) error {
 		return errUnsupported
 	}
 	h := daemon.NewHome(c.String("home"))
-	cfg, token, err := loadStartConfig(c, h)
+	cfg, token, err := loadStartConfig(ctx, c, h)
 	if err != nil {
 		return err
 	}
@@ -95,9 +100,9 @@ func runStart(ctx context.Context, c *cli.Command) error {
 
 // loadStartConfig saves the config and the token from the flags. Without
 // flags it loads the saved ones.
-func loadStartConfig(c *cli.Command, h daemon.Home) (daemon.StartConfig, string, error) {
+func loadStartConfig(ctx context.Context, c *cli.Command, h daemon.Home) (daemon.StartConfig, string, error) {
 	saved, savedErr := h.LoadConfig()
-	if !c.IsSet("endpoint") && !c.IsSet("token-file") {
+	if !c.IsSet("endpoint") && !c.IsSet("token-file") && !c.IsSet("join") {
 		token, tokErr := h.LoadToken()
 		if errors.Is(savedErr, os.ErrNotExist) || errors.Is(tokErr, os.ErrNotExist) {
 			return saved, "", &exitError{code: 2, msg: "not set up: run start with --endpoint and --token-file"}
@@ -123,7 +128,18 @@ func loadStartConfig(c *cli.Command, h daemon.Home) (daemon.StartConfig, string,
 	if cfg.Endpoint == "" {
 		return cfg, "", &exitError{code: 2, msg: "--endpoint required"}
 	}
-	token, err := resolveToken(c, stdin)
+	var (
+		token string
+		err   error
+	)
+	if c.IsSet("join") {
+		if c.IsSet("token-file") {
+			return cfg, "", &exitError{code: 2, msg: "use --join or --token-file, not both"}
+		}
+		token, err = joinHost(ctx, c, &cfg)
+	} else {
+		token, err = resolveToken(c, stdin)
+	}
 	if err != nil {
 		return cfg, "", &exitError{code: 2, msg: err.Error()}
 	}
@@ -134,6 +150,31 @@ func loadStartConfig(c *cli.Command, h daemon.Home) (daemon.StartConfig, string,
 		return cfg, "", err
 	}
 	return cfg, token, nil
+}
+
+// joinHost trades the join token for a sampler token. A new endpoint
+// from the server replaces the one in cfg.
+func joinHost(ctx context.Context, c *cli.Command, cfg *daemon.StartConfig) (string, error) {
+	name := c.String("name")
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	if name == "" {
+		return "", errors.New("--name required: the host has no name")
+	}
+	enr, err := joinCall(ctx, cfg.Endpoint, c.String("join"), name, machineID(), cfg.Insecure)
+	switch {
+	case errors.Is(err, push.ErrJoinRejected):
+		return "", errors.New("join token rejected: make a new one")
+	case errors.Is(err, push.ErrPlanFull):
+		return "", errors.New("plan is full: the plan has no room for this host")
+	case err != nil:
+		return "", err
+	}
+	if enr.Endpoint != "" {
+		cfg.Endpoint = enr.Endpoint
+	}
+	return enr.Token, nil
 }
 
 // ensureBoot sets the reboot entry when the wanted mode differs from the

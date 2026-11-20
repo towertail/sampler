@@ -115,6 +115,57 @@ func TestStartEmptyTokenFails(t *testing.T) {
 	}
 }
 
+func TestStartJoinSavesToken(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		io.WriteString(w, `{"node_id":"n1","sampler_token":"tt_real","endpoint":"https://api.test"}`)
+	}))
+	defer srv.Close()
+	setBoot(t, &fakeBoot{})
+	fakeDetach(t, 9)
+	oldID := machineID
+	machineID = func() string { return "mid-7" }
+	t.Cleanup(func() { machineID = oldID })
+	dir := newHomeDir(t)
+	code, stdout, stderr := runArgs("start", "--endpoint", srv.URL, "--join", "tt_join_J", "--name", "web-1", "--boot", "none", "--home", dir)
+	if code != 0 || stdout != "started, pid 9\n" {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if got["join_token"] != "tt_join_J" || got["display_name"] != "web-1" || got["machine_id"] != "mid-7" {
+		t.Fatalf("join body = %v", got)
+	}
+	h := daemon.NewHome(dir)
+	if tok, _ := h.LoadToken(); tok != "tt_real" {
+		t.Fatalf("saved token = %q", tok)
+	}
+	cfg, _ := h.LoadConfig()
+	if cfg.Endpoint != "https://api.test" {
+		t.Fatalf("saved endpoint = %q", cfg.Endpoint)
+	}
+	for _, p := range []string{h.ConfigPath(), h.TokenPath()} {
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), "tt_join_J") {
+			t.Fatalf("%s holds the join token", p)
+		}
+	}
+}
+
+func TestStartJoinRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	setBoot(t, &fakeBoot{})
+	dir := newHomeDir(t)
+	code, _, stderr := runArgs("start", "--endpoint", srv.URL, "--join", "bad", "--name", "h", "--home", dir)
+	if code != 2 || !strings.Contains(stderr, "join token rejected") {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	if _, err := os.Stat(daemon.NewHome(dir).TokenPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("token saved after a rejected join")
+	}
+}
+
 func TestStartAlreadyRunning(t *testing.T) {
 	setBoot(t, &fakeBoot{})
 	calls := fakeDetach(t, 1)
