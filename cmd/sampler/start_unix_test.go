@@ -13,9 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/daemon"
 	"github.com/towertail/sampler/internal/push"
 	"github.com/towertail/sampler/pkg/schema"
@@ -103,6 +105,61 @@ func TestStartTokenFromStdin(t *testing.T) {
 	}
 	if len(*calls) != 1 || strings.Join((*calls)[0], " ") != "start --foreground --home "+dir {
 		t.Fatalf("detach args = %v", *calls)
+	}
+}
+
+func TestStartSavesNoProcCwd(t *testing.T) {
+	setBoot(t, &fakeBoot{})
+	fakeDetach(t, 3)
+	setStdin(t, strings.NewReader("tok\n"))
+	dir := newHomeDir(t)
+	h := daemon.NewHome(dir)
+	saved := func() daemon.StartConfig {
+		cfg, err := h.LoadConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+
+	args := []string{"start", "--endpoint", "https://x.test", "--token-file", "-", "--boot", "none", "--home", dir}
+	if code, _, stderr := runArgs(append(args, "--no-proc-cwd")...); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	if !saved().NoProcCwd {
+		t.Fatal("--no-proc-cwd: not saved")
+	}
+	if b, _ := os.ReadFile(h.ConfigPath()); !strings.Contains(string(b), `"no_proc_cwd": true`) {
+		t.Fatalf("config = %s", b)
+	}
+
+	// Only this flag: change only this value.
+	before := saved()
+	if code, _, stderr := runArgs("start", "--no-proc-cwd=false", "--home", dir); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	after := saved()
+	if after.NoProcCwd {
+		t.Fatal("--no-proc-cwd=false: still on")
+	}
+	before.NoProcCwd = false
+	if after != before {
+		t.Fatalf("other values changed: %+v -> %+v", before, after)
+	}
+	if tok, _ := h.LoadToken(); tok != "tok" {
+		t.Fatalf("token = %q", tok)
+	}
+
+	// A new config from flags keeps the saved value when the flag is not set.
+	if code, _, stderr := runArgs("start", "--no-proc-cwd", "--home", dir); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	setStdin(t, strings.NewReader("tok2\n"))
+	if code, _, stderr := runArgs(args...); code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr)
+	}
+	if !saved().NoProcCwd {
+		t.Fatal("new config lost the saved value")
 	}
 }
 
@@ -391,6 +448,97 @@ func TestRunPushGoneDisablesBootAndForgets(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "cloud asked to exit: host_removed") {
 		t.Errorf("log = %q", log.String())
+	}
+}
+
+func TestPushAppliesProcCwdFromReply(t *testing.T) {
+	var mu sync.Mutex
+	replied := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		if !replied {
+			replied = true
+			io.WriteString(w, `{"proc_cwd":false}`)
+			return
+		}
+		io.WriteString(w, `{}`)
+	}))
+	defer srv.Close()
+
+	h := daemon.NewHome(newHomeDir(t))
+	_ = h.SaveConfig(daemon.StartConfig{Endpoint: srv.URL, Boot: "none"})
+	var log bytes.Buffer
+	sw := newProcCwdSwitch(false, h.SetNoProcCwd, &log)
+	var smu sync.Mutex
+	var samples []schema.Sample
+	var offAtStart []bool
+	fn := sw.sampleFn(options{noPorts: true, topN: 20, procScanMax: collect.DefaultProcScanMax}, nil)
+	cfg := push.Config{
+		Endpoint: srv.URL, Token: "tok", Interval: 300 * time.Millisecond,
+		FlushInterval: 10 * time.Millisecond, BatchSize: 1, OnProcCwd: sw.Apply,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- runPush(ctx, cfg, func() schema.Sample {
+			off := sw.off.Load()
+			s := fn()
+			smu.Lock()
+			samples = append(samples, s)
+			offAtStart = append(offAtStart, off)
+			smu.Unlock()
+			return s
+		}, h, nil, &log)
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		smu.Lock()
+		n := len(samples)
+		smu.Unlock()
+		if n >= 4 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	smu.Lock()
+	defer smu.Unlock()
+	if len(samples) < 4 {
+		t.Fatalf("got %d samples", len(samples))
+	}
+	cwds := func(s schema.Sample) int {
+		n := 0
+		for _, it := range s.Procs.Items {
+			if it.Cwd != "" || it.Repo != "" {
+				n++
+			}
+		}
+		return n
+	}
+	if cwds(samples[0]) == 0 {
+		t.Skip("no process with a readable working folder")
+	}
+	// A sample that starts before the reply can still carry folders.
+	checked := 0
+	for i, s := range samples {
+		if !offAtStart[i] {
+			continue
+		}
+		checked++
+		if n := cwds(s); n != 0 {
+			t.Errorf("sample %d: %d rows with folders after proc_cwd:false", i, n)
+		}
+	}
+	if checked == 0 {
+		t.Error("no sample started after the reply")
+	}
+	if cfg, _ := h.LoadConfig(); !cfg.NoProcCwd || cfg.Endpoint != srv.URL {
+		t.Errorf("config = %+v", cfg)
 	}
 }
 

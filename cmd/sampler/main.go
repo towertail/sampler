@@ -32,6 +32,7 @@ type options struct {
 	noProc        bool
 	noPorts       bool
 	noHealth      bool
+	noProcCwd     bool
 	topN          int
 	procScanMax   int
 	maxRuntime    time.Duration
@@ -110,6 +111,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
 			&cli.BoolFlag{Name: "no-ports", Usage: "skip per-process ports collection"},
 			&cli.BoolFlag{Name: "no-health", Usage: "skip host health collection"},
+			&cli.BoolFlag{Name: "no-proc-cwd", Usage: "do not send the working folder and repo of processes"},
 			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
 			&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax, Usage: "skip the per-process scan above this process count (0 = no limit)"},
 			&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval, Usage: "ports refresh cadence in streaming mode"},
@@ -184,9 +186,9 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 					// the expensive ports collector runs every ports-interval
 					// rather than every sample.
 					pc := &portCache{}
-					return runPush(ctx, pcfg, func() schema.Sample {
-						return streamingSample(&opts, pc)
-					}, daemon.Home{}, nil, stderr)
+					sw := newProcCwdSwitch(opts.noProcCwd, nil, stderr)
+					pcfg.OnProcCwd = sw.Apply
+					return runPush(ctx, pcfg, sw.sampleFn(opts, pc), daemon.Home{}, nil, stderr)
 				},
 			},
 			{
@@ -268,6 +270,7 @@ func metricGatingFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "no-proc"},
 		&cli.BoolFlag{Name: "no-ports"},
 		&cli.BoolFlag{Name: "no-health"},
+		&cli.BoolFlag{Name: "no-proc-cwd", Usage: "do not send the working folder and repo of processes"},
 		&cli.IntFlag{Name: "top-n", Value: 20},
 		&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax},
 		&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval},
@@ -282,6 +285,7 @@ func gatingFromCmd(c *cli.Command) options {
 		noProc:        c.Bool("no-proc"),
 		noPorts:       c.Bool("no-ports"),
 		noHealth:      c.Bool("no-health"),
+		noProcCwd:     c.Bool("no-proc-cwd"),
 		topN:          c.Int("top-n"),
 		procScanMax:   c.Int("proc-scan-max"),
 		portsInterval: c.Duration("ports-interval"),
@@ -314,6 +318,7 @@ func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) erro
 		noProc:        c.Bool("no-proc"),
 		noPorts:       c.Bool("no-ports"),
 		noHealth:      c.Bool("no-health"),
+		noProcCwd:     c.Bool("no-proc-cwd"),
 		topN:          c.Int("top-n"),
 		procScanMax:   c.Int("proc-scan-max"),
 		maxRuntime:    c.Duration("max-runtime"),
@@ -439,7 +444,7 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 
 	if !opts.noProc {
-		p, errs := collect.Proc(collect.ProcOptions{Window: window, TopN: opts.topN, ScanMax: opts.procScanMax})
+		p, errs := collect.Proc(collect.ProcOptions{Window: window, TopN: opts.topN, ScanMax: opts.procScanMax, NoCwd: opts.noProcCwd})
 		allErrs = append(allErrs, errs...)
 		s.Procs = &p
 	}

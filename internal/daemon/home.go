@@ -56,6 +56,9 @@ type StartConfig struct {
 	Insecure      bool          `json:"insecure"`
 	// Boot is the reboot entry that is set: linger, launchagent, cron, none.
 	Boot string `json:"boot"`
+	// NoProcCwd stops the working folder and repo of processes. An old
+	// file without the key sends the folders.
+	NoProcCwd bool `json:"no_proc_cwd,omitempty"`
 }
 
 func (h Home) SaveConfig(c StartConfig) error {
@@ -89,6 +92,20 @@ func (h Home) SetBoot(mode string) error {
 		return err
 	}
 	c.Boot = mode
+	return h.SaveConfig(c)
+}
+
+// SetNoProcCwd stores the folder setting in the saved config. It does
+// nothing when no config was saved.
+func (h Home) SetNoProcCwd(off bool) error {
+	c, err := h.LoadConfig()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	c.NoProcCwd = off
 	return h.SaveConfig(c)
 }
 

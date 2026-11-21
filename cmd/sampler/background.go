@@ -21,7 +21,6 @@ import (
 	"github.com/towertail/sampler/internal/daemon"
 	"github.com/towertail/sampler/internal/push"
 	"github.com/towertail/sampler/internal/version"
-	"github.com/towertail/sampler/pkg/schema"
 )
 
 const (
@@ -69,6 +68,7 @@ func startFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued control messages (kill_process)"},
 		&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans (disk_scan)"},
 		&cli.BoolFlag{Name: "insecure", Usage: "accept self-signed TLS certs"},
+		&cli.BoolFlag{Name: "no-proc-cwd", Usage: "do not send the working folder and repo of processes"},
 		&cli.StringFlag{Name: "boot", Usage: "reboot entry: auto, linger, launchagent, cron or none (default: the saved one, else auto)"},
 		&cli.BoolFlag{Name: "foreground", Usage: "run in this process and not in the background"},
 		homeFlag(),
@@ -110,6 +110,12 @@ func loadStartConfig(ctx context.Context, c *cli.Command, h daemon.Home) (daemon
 		if savedErr != nil {
 			return saved, "", savedErr
 		}
+		if tokErr == nil && c.IsSet("no-proc-cwd") && saved.NoProcCwd != c.Bool("no-proc-cwd") {
+			saved.NoProcCwd = c.Bool("no-proc-cwd")
+			if err := h.SaveConfig(saved); err != nil {
+				return saved, "", err
+			}
+		}
 		return saved, token, tokErr
 	}
 	cfg := daemon.StartConfig{
@@ -121,9 +127,13 @@ func loadStartConfig(ctx context.Context, c *cli.Command, h daemon.Home) (daemon
 	}
 	if savedErr == nil {
 		cfg.Boot = saved.Boot
+		cfg.NoProcCwd = saved.NoProcCwd
 		if cfg.Endpoint == "" {
 			cfg.Endpoint = saved.Endpoint
 		}
+	}
+	if c.IsSet("no-proc-cwd") {
+		cfg.NoProcCwd = c.Bool("no-proc-cwd")
 	}
 	if cfg.Endpoint == "" {
 		return cfg, "", &exitError{code: 2, msg: "--endpoint required"}
@@ -291,9 +301,12 @@ func runForeground(ctx context.Context, c *cli.Command, h daemon.Home, b bootMan
 		procScanMax:   collect.DefaultProcScanMax,
 		portsInterval: collect.DefaultPortsInterval,
 		portsMax:      collect.DefaultPortsMaxConn,
+		noProcCwd:     cfg.NoProcCwd,
 	}
 	pc := &portCache{}
-	err = runPush(ctx, pcfg, func() schema.Sample { return streamingSample(&opts, pc) }, h, b, log)
+	sw := newProcCwdSwitch(opts.noProcCwd, h.SetNoProcCwd, log)
+	pcfg.OnProcCwd = sw.Apply
+	err = runPush(ctx, pcfg, sw.sampleFn(opts, pc), h, b, log)
 	fmt.Fprintln(log, "stop")
 	return err
 }

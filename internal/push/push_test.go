@@ -222,6 +222,35 @@ func TestFlush202UpdateRecorded(t *testing.T) {
 	}
 }
 
+func TestFlush202ProcCwdCallback(t *testing.T) {
+	var got []bool
+	p, _, _ := newTestPusherCfg(t, Config{Interval: 30 * time.Second, OnProcCwd: func(send bool) { got = append(got, send) }},
+		reply{http.StatusAccepted, `{"proc_cwd":false}`},
+		reply{http.StatusAccepted, `{"proc_cwd":true,"interval":"5s"}`},
+		reply{http.StatusAccepted, `{}`},
+		reply{http.StatusAccepted, ``},
+		reply{http.StatusAccepted, `not json`},
+		reply{http.StatusAccepted, `{"proc_cwd":"yes"}`})
+	for i := 0; i < 6; i++ {
+		p.ring.push(sample("a"))
+		if err := p.attemptFlush(context.Background()); err != nil {
+			t.Fatalf("flush %d: %v", i, err)
+		}
+	}
+	if len(got) != 2 || got[0] || !got[1] {
+		t.Fatalf("callback calls = %v, want [false true]", got)
+	}
+}
+
+func TestFlush202ProcCwdNilCallback(t *testing.T) {
+	p, _, _ := newTestPusherCfg(t, Config{Interval: 30 * time.Second},
+		reply{http.StatusAccepted, `{"proc_cwd":false}`})
+	p.ring.push(sample("a"))
+	if err := p.attemptFlush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFlush402PausesAndRequeues(t *testing.T) {
 	rec := &recorder{}
 	p, is, _ := newTestPusherCfg(t, Config{Recorder: rec},

@@ -61,7 +61,7 @@ func TestConfigRoundTrip(t *testing.T) {
 	if _, err := h.LoadConfig(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("empty home: %v", err)
 	}
-	want := StartConfig{Endpoint: "https://x", Interval: 30 * time.Second, AllowControl: true, Insecure: true, Boot: "cron"}
+	want := StartConfig{Endpoint: "https://x", Interval: 30 * time.Second, AllowControl: true, Insecure: true, Boot: "cron", NoProcCwd: true}
 	if err := h.SaveConfig(want); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +70,27 @@ func TestConfigRoundTrip(t *testing.T) {
 		t.Fatalf("config = %+v, %v", got, err)
 	}
 	assertMode(t, h.ConfigPath(), 0o600)
+}
+
+func TestOldConfigSendsFolders(t *testing.T) {
+	h := newHome(t)
+	old := `{"endpoint":"https://x","interval":30000000000,"allow_control":false,"allow_disk_scan":false,"insecure":false,"boot":"cron"}`
+	if err := h.SaveConfig(StartConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.ConfigPath(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.LoadConfig()
+	if err != nil || got.NoProcCwd {
+		t.Fatalf("config = %+v, %v", got, err)
+	}
+	if err := h.SetNoProcCwd(true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = h.LoadConfig(); !got.NoProcCwd || got.Boot != "cron" {
+		t.Fatalf("config = %+v", got)
+	}
 }
 
 func TestTokenMode0600(t *testing.T) {

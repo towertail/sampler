@@ -43,6 +43,9 @@ type Config struct {
 	Recorder Recorder
 	// UserAgent is sent with each ingest request. Empty sends the Go default.
 	UserAgent string
+	// OnProcCwd gets the proc_cwd key of an ingest reply: true sends the
+	// working folders. Nil ignores the key. The flush goroutine calls it.
+	OnProcCwd func(send bool)
 }
 
 // Recorder takes the result of each push attempt.
@@ -293,6 +296,8 @@ func (e *flushError) Error() string {
 type ingestReply struct {
 	Interval string `json:"interval"`
 	Update   string `json:"update"`
+	// ProcCwd is nil when the key is missing.
+	ProcCwd *bool `json:"proc_cwd"`
 }
 
 func (p *pusher) attemptFlush(ctx context.Context) error {
@@ -377,6 +382,9 @@ func (p *pusher) handleOrders(resp *http.Response) {
 		fmt.Fprintf(p.stderr, "push: bad reply body: %v\n", err)
 		p.record(r)
 		return
+	}
+	if reply.ProcCwd != nil && p.cfg.OnProcCwd != nil {
+		p.cfg.OnProcCwd(*reply.ProcCwd)
 	}
 	d := p.cfg.Interval
 	if reply.Interval != "" {

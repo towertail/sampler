@@ -13,6 +13,7 @@ import (
 	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/version"
 	"github.com/towertail/sampler/internal/wiretest"
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -122,6 +123,37 @@ func TestRunOnceNoProcOmitsField(t *testing.T) {
 	}
 	if _, ok := m["procs"]; ok {
 		t.Error("procs should be omitted with --no-proc")
+	}
+}
+
+func TestRunOnceNoProcCwdOmitsFolders(t *testing.T) {
+	folders := func(args ...string) (withCwd, withRepo int) {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 0 {
+			t.Fatalf("exit = %d, stderr=%s", code, errb.String())
+		}
+		var s schema.Sample
+		if err := json.Unmarshal(out.Bytes(), &s); err != nil {
+			t.Fatalf("invalid json: %v", err)
+		}
+		for _, it := range s.Procs.Items {
+			if it.Cwd != "" {
+				withCwd++
+			}
+			if it.Repo != "" {
+				withRepo++
+			}
+		}
+		return withCwd, withRepo
+	}
+	if cwd, repo := folders("--once", "--no-ports", "--no-proc-cwd"); cwd != 0 || repo != 0 {
+		t.Errorf("--no-proc-cwd: %d cwd, %d repo, want none", cwd, repo)
+	}
+	if cwd, repo := folders("once", "--no-ports", "--no-proc-cwd"); cwd != 0 || repo != 0 {
+		t.Errorf("once --no-proc-cwd: %d cwd, %d repo, want none", cwd, repo)
+	}
+	if cwd, _ := folders("--once", "--no-ports"); cwd == 0 {
+		t.Skip("no process with a readable working folder")
 	}
 }
 
