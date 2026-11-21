@@ -33,7 +33,7 @@ Supported targets (7 triples): `linux-amd64`, `linux-arm64`, `linux-armv7`, `dar
 | push (experimental) | `towertail-sampler push --endpoint <url> --token <token>` | Send samples over HTTPS to a Towertail server. |
 | service (experimental) | `towertail-sampler service install ...` | Install push mode as a systemd unit or launchd agent. |
 
-Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip a collector. Run `towertail-sampler --help` for all flags.
+Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip a collector. Use `--no-proc-cwd` to keep the working folders of processes on the host. Run `towertail-sampler --help` for all flags.
 
 The `once`, `stream` and `self-check` modes do not make network calls.
 

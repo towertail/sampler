@@ -29,7 +29,7 @@ The `--once`, `stream`, `scan` and `push` modes write no file. The background mo
 | `sampler.lock` | `flock` while the process runs. |
 | `sampler.pid` | The pid of the process. |
 | `sampler.log`, `sampler.log.1` | The log. Each file has 5 MB at most, and there is one old file. |
-| `sampler.json` | The saved start config. It has no token. Mode 0600. |
+| `sampler.json` | The saved start config. It has no token. Mode 0600. It holds `no_proc_cwd` (§3.5). An old file without the key sends the folders. |
 | `sampler.token` | The sampler token. Mode 0600. |
 | `sampler.state.json` | The result of the last push, written by the running process. Mode 0600. |
 
@@ -190,8 +190,9 @@ The fixtures `testdata/scan-linux.ndjson`, `testdata/scan-darwin.ndjson` and `te
 | `--version`, `-V` | — | Print `towertail-sampler <semver>+<sha>` (one line) and exit 0. The `version` subcommand prints the same line. Used by the bootstrap handshake. |
 | `--self-check` | — | Collect one sample, throw it away, print `ok` + exit 0. Used to verify the binary runs on the target kernel before the app commits to using it. |
 | `--no-disk` / `--no-net` / `--no-proc` / `--no-ports` / `--no-health` | off | Escape hatches if a specific collector hangs on a weird host — Mac-side config disables it for that server. |
+| `--no-proc-cwd` | off | Do not send `cwd` and `repo` of the process rows. Valid for the root command, `once`, `stream`, `push` and `start`. |
 | `--proc-scan-max <int>` | 10000 | Skip the per-process scan when the host has more processes than this. `procs` then carries only `total` and `skipped=true`. The scan costs about 0.6 ms per process, so this keeps one sample under the client's 10 s timeout. `0` disables the limit. The `health` counts are always collected. |
-| `--top-n <int>` | 20 | Cap on the process list. Returns the union of top-N by CPU% and top-N by RSS, deduped (so you get between N and 2N rows). `0` disables the cap. |
+| `--top-n <int>` | 20 | Cap on the process list. Returns the union of top-N by CPU%, top-N by RSS and the top 10 by I/O rate, deduped (so you get between N and 2N+10 rows). `0` disables the cap. |
 | `--ports-interval <dur>` | 10s | How often the streaming sampler rebuilds the per-process ports table. Between refreshes the previous snapshot is re-emitted with its `collected_ts` unchanged. Ignored in `--once` mode (always one fresh scan). |
 | `--ports-max <int>` | 2000 | Hard cap on connections collected per refresh (passed straight to gopsutil's `ConnectionsMax`). When hit, `ports.truncated=true`. |
 
@@ -201,7 +202,7 @@ The `scan` subcommand has its own flags (§3.4). The `push`, `start` and `servic
 
 ```
 towertail-sampler push --endpoint <url> --token-file <file> [--allow-control] [--allow-disk-scan]
-towertail-sampler start --endpoint <url> --token-file - [--allow-control] [--allow-disk-scan] [--boot auto|linger|launchagent|cron|none]
+towertail-sampler start --endpoint <url> --token-file - [--allow-control] [--allow-disk-scan] [--no-proc-cwd] [--boot auto|linger|launchagent|cron|none]
 towertail-sampler start | stop | status
 towertail-sampler service install --endpoint <url> --token <token> [--system] [--allow-control] [--allow-disk-scan]
 ```
@@ -212,6 +213,7 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 |---|---|---|
 | `--allow-control` | off | Do the `kill_process` control messages. |
 | `--allow-disk-scan` | off | Do the `disk_scan` control messages. |
+| `--no-proc-cwd` | off | Do not send `cwd` and `repo`. `start` saves the value as `no_proc_cwd` in `sampler.json`. |
 | `--heartbeat <dur>` | 15s | Time between polls of `GET /v1/control/next`. The sampler polls only when `--allow-control` or `--allow-disk-scan` is on. |
 
 **Ingest orders.** The reply to `POST /v1/ingest/samples` can hold orders (`docs/wire.md` §3.0). The request has the header `User-Agent: towertail-sampler/<version>`, with the version of `--version` and no `+<sha>`.
@@ -220,6 +222,7 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 |---|---|
 | 202 with `interval` | Sets the sample interval to that Go duration. A value that is not a duration, or is less than 1 s, is logged and ignored. |
 | 202 with no `interval` (also an empty body) | Sets the interval back to the configured value (`--interval`, default 30 s). |
+| 202 with `proc_cwd` (bool) | `true` sends the working folders. `false` does not send them. When the value differs from the current one, the next sample uses it. In background mode the sampler also saves it as `no_proc_cwd` (the opposite value) in `sampler.json`. A reply with no `proc_cwd` key changes nothing. |
 | 202 with `update` | Records the version in the state. The sampler does not update itself. |
 | 402 `{"retry_after": N}` | Keeps the batch and sends nothing for N seconds (default 3600, at least 60, at most 24 h). It goes on to sample into the buffer. The buffer drops the oldest samples when it is full. |
 | 410 | Stops. In background mode it also removes the reboot entry, `sampler.json` and `sampler.token`, writes the reason in the state (`gone`), logs `cloud asked to exit: <reason>` and exits with code 0. |
@@ -229,7 +232,7 @@ Push mode sends samples over HTTPS to a Towertail server. The server contract is
 
 **Background mode.** `start` keeps the sampler running with no sudo and no service setup. It works on Linux and macOS. On Windows, `start`, `stop` and `boot` print `unsupported on windows` and exit with code 2.
 
-- `start` with `--endpoint` and `--token-file` saves the config (`sampler.json`) and the token (`sampler.token`, mode 0600). `--token-file -` reads one line from stdin. The token is never in argv. `start` with no flag reads the saved files. With no saved config it exits with code 2 and the message `not set up: run start with --endpoint and --token-file`.
+- `start` with `--endpoint` and `--token-file` saves the config (`sampler.json`) and the token (`sampler.token`, mode 0600). `--token-file -` reads one line from stdin. The token is never in argv. `start` with no flag reads the saved files. `start --no-proc-cwd[=false]` with no `--endpoint`, `--token-file` or `--join` changes only `no_proc_cwd` in the saved config. Restart the sampler to apply it. A new config from `--endpoint` keeps the saved `no_proc_cwd` when the flag is not set. With no saved config it exits with code 2 and the message `not set up: run start with --endpoint and --token-file`.
 - `start --join <token> [--name <name>]` trades a one-use join token for a sampler token (`POST /v1/sampler/join`, `docs/wire.md` §3.0.1) and saves the token that comes back, not the join token. The request has the host name (`--name`, default: the host name) and `host.machine_id`, so that a second install on the same host makes no second node. An `endpoint` in the reply replaces `--endpoint`. A rejected join token or a full plan gives exit code 2.
 - `scripts/install.sh --join <token> --name <name> [--endpoint <url>] [--version <x.y.z>]` is a release asset. It needs no sudo. It downloads `towertail-sampler-<os>-<arch>` to `~/.towertail/bin/`, checks the SHA-256 against `manifest.json` of the release, runs `start --join ... --boot auto` and prints the `status` JSON.
 - `--boot` sets the entry that starts the sampler after a reboot. The default is the saved value, else `auto`. A failure prints a warning and the start goes on.
@@ -325,8 +328,8 @@ One JSON object per sample. Newline-delimited in streaming mode. Fields are stab
     "total": 312,
     "visible": 311,
     "items": [
-      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "read_bytes": 58720256, "write_bytes": 12582912 },
-      { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S" }
+      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "read_bytes": 58720256, "write_bytes": 12582912, "parent": "systemd", "read_bps": 1048576, "write_bps": 262144 },
+      { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S", "cwd": "/srv/app/web", "repo": "/srv/app", "parent": "pm2" }
     ]
   },
   "ports": {
@@ -368,7 +371,7 @@ One JSON object per sample. Newline-delimited in streaming mode. Fields are stab
 - **`net.rx_cum` / `tx_cum`**: lifetime counters. The Mac app can recompute deltas across polls as a cross-check, and detect counter resets (reboots) when `rx_cum` decreases.
 - **`errors`**: non-fatal collector errors (e.g., "netstat returned -1 for iface veth0", "disk.Usage(/Volumes/nas): no result in 1s, mount skipped", "disk: time limit 5s reached, 12 mounts not read"). The Mac app logs these but still ingests the rest of the sample.
 - **`machine_id`**: optional, read-only. `/etc/machine-id` on Linux, `IOPlatformUUID` on Darwin. Omitted when unavailable (containers without `machine-id`, hardened kernels, etc.). On Linux it is also omitted when the host has no `/etc/machine-id` and no readable `/sys/class/dmi/id/product_uuid`, because the fallback (the boot id) changes at each reboot. The app uses it as a secondary key to detect hostname renames or collisions — the primary key is still the user-configured SSH target.
-- **`procs`**: optional per-process table. Omitted when `--no-proc` is set. `root=true` means the sampler ran with euid 0, so the list is comprehensive across users (Linux: full `/proc` visibility; macOS: `kinfo_proc` with other-user fields filled). `root=false` + macOS means the list only contains the SSH user's own processes. `top_n` echoes the requested cap; `total` is the full process count on the host; `visible` is how many the sampler could inspect (lower than `total` when some entries were gated). `items` is the union of top-N by `cpu_pct` and top-N by `rss`, deduped by pid, ordered CPU-desc. `cpu_pct` is computed from a ~200ms self-sampling delta (same window as aggregate CPU) so it matches `top(1)`'s aggregate-across-cores convention (0..100×cores). `rss` is resident set size in bytes. Per-proc `user`, `cmd`, `threads`, `state`, `ppid`, `start_ts` are best-effort and omitted when the kernel denies access.
+- **`procs`**: optional per-process table. Omitted when `--no-proc` is set. `root=true` means the sampler ran with euid 0, so the list is comprehensive across users (Linux: full `/proc` visibility; macOS: `kinfo_proc` with other-user fields filled). `root=false` + macOS means the list only contains the SSH user's own processes. `top_n` echoes the requested cap; `total` is the full process count on the host; `visible` is how many the sampler could inspect (lower than `total` when some entries were gated). `items` is the union of top-N by `cpu_pct`, top-N by `rss` and the top 10 by I/O rate (`read_bps` + `write_bps`, only rows with a rate above 0), deduped by pid, ordered CPU-desc. `cpu_pct` is computed from a ~200ms self-sampling delta (same window as aggregate CPU) so it matches `top(1)`'s aggregate-across-cores convention (0..100×cores). `rss` is resident set size in bytes. Per-proc `user`, `cmd`, `threads`, `state`, `ppid`, `start_ts`, `cwd`, `repo` and `parent` are best-effort and omitted when the kernel denies access. The sampler reads `ppid`, `user`, `cmd`, `threads`, `start_ts`, `cwd`, `repo` and `parent` only for the rows that stay after the cut, so a host with many processes costs less.
 - **`procs.skipped`**: `true` when `total` is above `--proc-scan-max`. The per-process scan did not run, so `visible` is `0` and `items` is empty. Omitted when `false`.
 - **`disks[].inodes_used` / `inodes_total`**: inode counts from `statfs`. Omitted when the filesystem reports no inodes (btrfs, NTFS, some network mounts).
 - **`health`**: cheap host-level health signals. Omitted when `--no-health` is set. Every field except `procs` is optional and omitted when the OS does not expose it. Collection does one light pass over the process table (Linux: `/proc/<pid>/stat` only; macOS: one `kern.proc.all` sysctl) and reads a few kernel counters. No root needed.
@@ -381,6 +384,10 @@ One JSON object per sample. Newline-delimited in streaming mode. Fields are stab
   - `mem_pressure`: macOS `kern.memorystatus_vm_pressure_level`: `1` normal, `2` warn, `4` critical.
   - `mem_pressure_pct`: macOS only. The share of memory in use as the kernel memory status sees it: `100 − kern.memorystatus_level`. `kern.memorystatus_level` is the "System-wide memory free percentage" that the `memory_pressure` tool shows. The value is an integer from 0 to 100. A higher value is worse. The field is omitted when the sysctl is not available. Clients compare it with the memory pressure threshold. Use `mem_pressure` only when this field is missing.
 - **`procs.items[].read_bytes` / `write_bytes`**: lifetime cumulative per-process disk I/O in bytes. Only present when the sampler can read the counters. **Linux** reads `/proc/<pid>/io`, which is mode 0400 and requires either owning the process or `CAP_SYS_PTRACE` (grant once via `sudo setcap cap_sys_ptrace+ep ~/.towertail/towertail-sampler`); rows without the capability omit both fields. **Windows** uses `GetProcessIoCounters`, which the owning user can call by default — per-proc I/O is populated for the sampler's own user out of the box, and for all users when the sampler runs elevated. **macOS** does not surface per-process I/O via any API gopsutil supports today, so both fields are always omitted there. Clients distinguish `null` (no visibility) from `0` (truly no I/O since start).
+- **`procs.items[].read_bps` / `write_bps`**: per-process disk I/O rate in bytes per second. The sampler reads the I/O counters twice, once at each end of the ~200 ms CPU window, and divides the difference by the elapsed time. The fields are omitted when one of the two reads fails, or when a counter goes down. Visibility is the same as for `read_bytes` / `write_bytes`, so macOS always omits them. A rate of `0` means no I/O in the window. The rate is a short sample, not an average.
+- **`procs.items[].cwd`**: the working folder of the process, as an absolute path. Omitted when the OS denies the read, and when `--no-proc-cwd` is set or the server sent `proc_cwd: false`.
+- **`procs.items[].repo`**: the absolute path of the nearest folder, from `cwd` upward, that holds a `.git` entry (a folder, or a file in a worktree). Omitted when there is none. The lookup has a budget of 100 ms for each scan and a cache of the folders it read. When the budget ends, the rows that remain have no `repo`. Omitted with `cwd`.
+- **`procs.items[].parent`**: the name of the process with pid `ppid`. The sampler sends the raw name, also for pid 1 and for init systems. Omitted when the parent is not in the scan.
 - **`ports`**: per-process aggregate of open sockets. Refreshed every `--ports-interval` (default 10s) in streaming mode and re-emitted unchanged in between — `collected_ts` is the wall-clock when the snapshot was actually built and lets the client render staleness. Omitted when `--no-ports` is set. `root` mirrors `procs.root` (matters because non-root on Linux can see system-wide listeners but PIDs for *other users'* sockets come back as 0). `total` is the number of connections gopsutil returned; `truncated=true` when `max_conn` was hit and some connections are not represented. Each `items[]` row is one PID: `listen_tcp` / `listen_udp` are sorted, deduped local ports the process is listening on, `est_out` / `est_in` count outbound vs inbound ESTABLISHED TCP connections (inbound = peer connected to one of our listeners; outbound = we connected to a peer), `udp_sockets` counts UDP sockets without a peer (UDP is connectionless — this is "how many open UDP ports this process holds"), `top_remote_ports` is the most-frequent remote ports for outbound connections capped at 5 entries (so the UI can spot "talking to a lot of :443" patterns). Listening sockets and processes with no sockets are skipped — empty `items[]` is normal on a quiet host. Aggregating server-side keeps the wire payload bounded (≤50 rows in practice) regardless of connection count.
 
 Omitted fields for v1: per-CPU breakdown, temperature, GPU, sensors, per-process network bytes (not exposed by Linux or macOS kernels without root + eBPF / private frameworks). Per-process disk I/O **is** included but may be `null` per-row on Linux without `CAP_SYS_PTRACE` and is always `null` on macOS.
