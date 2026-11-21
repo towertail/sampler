@@ -439,7 +439,7 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 
 	if !opts.noProc {
-		p, errs := collect.Proc(window, opts.topN, opts.procScanMax)
+		p, errs := collect.Proc(collect.ProcOptions{Window: window, TopN: opts.topN, ScanMax: opts.procScanMax})
 		allErrs = append(allErrs, errs...)
 		s.Procs = &p
 	}
