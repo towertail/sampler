@@ -146,3 +146,25 @@ func TestMemPressurePctJSON(t *testing.T) {
 		t.Errorf("pointer to 0 gives no key: %s", b)
 	}
 }
+
+func TestProcSampleFolderKeysOmitWhenEmpty(t *testing.T) {
+	b, err := json.Marshal(ProcSample{PID: 1, Name: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"cwd", "repo", "parent", "read_bps", "write_bps"} {
+		if strings.Contains(string(b), `"`+k+`"`) {
+			t.Errorf("empty sample has key %q: %s", k, b)
+		}
+	}
+	zero := int64(0)
+	b, err = json.Marshal(ProcSample{PID: 1, Cwd: "/a", Repo: "/a", Parent: "p", ReadBps: &zero, WriteBps: &zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"cwd":"/a"`, `"repo":"/a"`, `"parent":"p"`, `"read_bps":0`, `"write_bps":0`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("sample misses %s: %s", k, b)
+		}
+	}
+}

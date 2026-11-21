@@ -58,8 +58,8 @@
     "total": 312,
     "visible": 311,
     "items": [
-      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "start_ts": "2026-04-08T08:31:14.000Z", "read_bytes": 58720256, "write_bytes": 12582912 },
-      { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S" }
+      { "pid": 812, "ppid": 1, "name": "postgres", "cmd": "postgres: main", "user": "postgres", "cpu_pct": 42.7, "rss": 536870912, "threads": 6, "state": "S", "start_ts": "2026-04-08T08:31:14.000Z", "read_bytes": 58720256, "write_bytes": 12582912, "parent": "systemd", "read_bps": 1048576, "write_bps": 262144 },
+      { "pid": 914, "ppid": 1, "name": "node",     "cmd": "node /app/server.js", "user": "app", "cpu_pct": 18.3, "rss": 430080000, "threads": 12, "state": "S", "cwd": "/srv/app/web", "repo": "/srv/app", "parent": "pm2" }
     ]
   },
   "ports": {

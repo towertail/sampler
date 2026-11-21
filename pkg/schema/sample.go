@@ -76,6 +76,10 @@ type ProcList struct {
 // cumulative disk I/O byte counters; nil when the sampler couldn't
 // read them (Linux: /proc/<pid>/io denied without CAP_SYS_PTRACE or
 // process ownership; macOS: gopsutil does not implement per-proc I/O).
+// Cwd is the working folder and Repo is the nearest parent folder (or
+// the folder itself) that holds .git. Parent is the name of the ppid
+// process. ReadBps/WriteBps are disk I/O rates over the CPU window; nil
+// means no visibility, a pointer to 0 means no I/O.
 type ProcSample struct {
 	PID        int32   `json:"pid"`
 	PPID       int32   `json:"ppid,omitempty"`
@@ -89,6 +93,11 @@ type ProcSample struct {
 	StartTS    string  `json:"start_ts,omitempty"`
 	ReadBytes  *int64  `json:"read_bytes,omitempty"`
 	WriteBytes *int64  `json:"write_bytes,omitempty"`
+	Cwd        string  `json:"cwd,omitempty"`
+	Repo       string  `json:"repo,omitempty"`
+	Parent     string  `json:"parent,omitempty"`
+	ReadBps    *int64  `json:"read_bps,omitempty"`
+	WriteBps   *int64  `json:"write_bps,omitempty"`
 }
 
 type HostInfo struct {
