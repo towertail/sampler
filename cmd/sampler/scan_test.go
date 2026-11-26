@@ -138,7 +138,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 
 func TestScanCancelOnStdinEOF(t *testing.T) {
 	root := t.TempDir()
-	for i := range 30 {
+	for i := range 200 {
 		dir := filepath.Join(root, fmt.Sprintf("d%03d", i))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
