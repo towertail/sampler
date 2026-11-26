@@ -20,6 +20,7 @@ goreleaser check           # release config
 ## Rules
 
 - **Wire contract.** `pkg/schema` and `docs/wire-format.md` define the sample format. A breaking schema change bumps `v` and needs changes in the apps (`towertail/towertail`) and the server.
+- **Push protocol shapes.** `pkg/schema/push.go` holds the push protocol shapes. The server imports them. A change to them needs a server change.
 - **`--version` output** is `towertail-sampler <Version>+<SHA>`. The app bootstrap parses it. Do not change it.
 - **Dependencies.** Use only the Go standard library, `gopsutil`, and `urfave/cli`. Ask before you add a dependency.
 - **Prose.** Write docs, comments and commit messages in ASD-STE100 Simplified Technical English.

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/towertail/sampler/pkg/schema"
 )
 
 var (
@@ -18,23 +20,11 @@ var (
 	ErrPlanFull = errors.New("plan is full")
 )
 
-// Enrollment is the reply of the join call.
-type Enrollment struct {
-	NodeID string `json:"node_id"`
-	Token  string `json:"sampler_token"`
-	// Endpoint, when it is not empty, replaces the endpoint that the sampler used for the call.
-	Endpoint string `json:"endpoint"`
-}
-
 // Join trades a one-use join token for a sampler token
 // (POST /v1/sampler/join). An empty machineID is left out of the request.
-func Join(ctx context.Context, endpoint, joinToken, name, machineID string, insecure bool) (Enrollment, error) {
-	var e Enrollment
-	body, err := json.Marshal(struct {
-		JoinToken   string `json:"join_token"`
-		DisplayName string `json:"display_name"`
-		MachineID   string `json:"machine_id,omitempty"`
-	}{joinToken, name, machineID})
+func Join(ctx context.Context, endpoint, joinToken, name, machineID string, insecure bool) (schema.EnrollResponse, error) {
+	var e schema.EnrollResponse
+	body, err := json.Marshal(schema.JoinRequest{JoinToken: joinToken, DisplayName: name, MachineID: machineID})
 	if err != nil {
 		return e, err
 	}
@@ -60,7 +50,7 @@ func Join(ctx context.Context, endpoint, joinToken, name, machineID string, inse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&e); err != nil {
 		return e, fmt.Errorf("join: bad reply: %w", err)
 	}
-	if e.Token == "" {
+	if e.SamplerToken == "" {
 		return e, errors.New("join: reply has no sampler token")
 	}
 	return e, nil

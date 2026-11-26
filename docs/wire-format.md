@@ -207,7 +207,7 @@ towertail-sampler start | stop | status
 towertail-sampler service install --endpoint <url> --token <token> [--system] [--allow-control] [--allow-disk-scan]
 ```
 
-Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `push` runs in the foreground and stops when its session closes. `start` runs the same loop in the background (see "Background mode" below). `service install` is deprecated: use `start`. It writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags.
+Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `push` runs in the foreground and stops when its session closes. `start` runs the same loop in the background (see "Background mode" below). `service install` is deprecated: use `start`. It writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags. `pkg/schema/push.go` holds the JSON shapes of this protocol. The server uses the same types.
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -519,7 +519,8 @@ Running as the SSH-authenticated **non-root** user:
 ├── pkg/
 │   └── schema/
 │       ├── sample.go            # Sample struct + JSON marshaling (public wire contract)
-│       └── scan.go              # scan lines (public wire contract)
+│       ├── scan.go              # scan lines (public wire contract)
+│       └── push.go              # push protocol shapes: join, ingest replies, control messages (public wire contract)
 ├── testdata/                    # sample JSON fixtures
 ├── docker/                      # container image for push mode
 └── README.md

@@ -184,7 +184,7 @@ func joinHost(ctx context.Context, c *cli.Command, cfg *daemon.StartConfig) (str
 	if enr.Endpoint != "" {
 		cfg.Endpoint = enr.Endpoint
 	}
-	return enr.Token, nil
+	return enr.SamplerToken, nil
 }
 
 // ensureBoot sets the reboot entry when the wanted mode differs from the

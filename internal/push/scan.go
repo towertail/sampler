@@ -35,13 +35,6 @@ const (
 	resultRetries = 3
 )
 
-// ControlMessage is one message from GET /v1/control/next.
-type ControlMessage struct {
-	ID      string          `json:"id"`
-	Kind    string          `json:"kind"`
-	Payload json.RawMessage `json:"payload"`
-}
-
 // ScanProcess is a started scan. Stdout gives its NDJSON lines. Stop
 // asks the scan to stop: it then writes a cancelled line and ends.
 type ScanProcess struct {
@@ -89,15 +82,8 @@ func ExecScanStarter(exe string, stderr io.Writer) ScanStarter {
 	}
 }
 
-// scanJob is the payload of a disk_scan message.
-type scanJob struct {
-	ID       string `json:"job_id"`
-	Root     string `json:"root"`
-	MaxDepth int    `json:"max_depth"`
-	MinBytes int64  `json:"min_bytes"`
-	// MinFrac is nil for the scan default. A refresh sends 0.
-	MinFrac *float64 `json:"min_frac,omitempty"`
-}
+// scanJob is the payload of a disk_scan message. It keeps the args method.
+type scanJob schema.DiskScanPayload
 
 // args gives the scan flags. A zero value keeps the scan default.
 func (j scanJob) args() []string {
@@ -151,19 +137,19 @@ func NewScanRunner(cfg Config, client *http.Client, start ScanStarter, stderr io
 
 // Handle starts the scan of a disk_scan message in a new goroutine and
 // returns. It posts an error line for the job when it cannot start it.
-func (r *ScanRunner) Handle(ctx context.Context, msg ControlMessage) error {
+func (r *ScanRunner) Handle(ctx context.Context, msg schema.ControlNextResponse) error {
 	var job scanJob
 	if err := json.Unmarshal(msg.Payload, &job); err != nil {
 		return fmt.Errorf("disk_scan: bad payload: %w", err)
 	}
-	if job.ID == "" {
+	if job.JobID == "" {
 		return errors.New("disk_scan: no job_id")
 	}
 	if !r.allow {
-		return r.postError(ctx, job.ID, msgDiskScanOff)
+		return r.postError(ctx, job.JobID, msgDiskScanOff)
 	}
 	if !r.acquire() {
-		return r.postError(ctx, job.ID, msgScanBusy)
+		return r.postError(ctx, job.JobID, msgScanBusy)
 	}
 	r.wg.Add(1)
 	go func() {
@@ -198,7 +184,7 @@ func (r *ScanRunner) release() {
 func (r *ScanRunner) run(ctx context.Context, job scanJob) {
 	proc, err := r.start(ctx, job.args())
 	if err != nil {
-		r.logErr(job.ID, r.postError(ctx, job.ID, "start the scan: "+err.Error()))
+		r.logErr(job.JobID, r.postError(ctx, job.JobID, "start the scan: "+err.Error()))
 		return
 	}
 	var once sync.Once
@@ -225,20 +211,20 @@ func (r *ScanRunner) run(ctx context.Context, job scanJob) {
 		}
 		switch l.T {
 		case schema.ScanLineProgress:
-			cancel, err := r.postLine(ctx, job.ID, line)
-			r.logErr(job.ID, err)
+			cancel, err := r.postLine(ctx, job.JobID, line)
+			r.logErr(job.JobID, err)
 			if cancel {
 				stop()
 			}
 		case schema.ScanLineError, schema.ScanLineCancelled:
 			final = true
-			_, err := r.postLine(ctx, job.ID, line)
-			r.logErr(job.ID, err)
+			_, err := r.postLine(ctx, job.JobID, line)
+			r.logErr(job.JobID, err)
 		case schema.ScanLineResult:
 			final = true
-			if err := r.putResult(ctx, job.ID, line); err != nil {
-				r.logErr(job.ID, err)
-				r.logErr(job.ID, r.postError(ctx, job.ID, "upload the result: "+err.Error()))
+			if err := r.putResult(ctx, job.JobID, line); err != nil {
+				r.logErr(job.JobID, err)
+				r.logErr(job.JobID, r.postError(ctx, job.JobID, "upload the result: "+err.Error()))
 			}
 		}
 	}
@@ -259,7 +245,7 @@ func (r *ScanRunner) run(ctx context.Context, job scanJob) {
 	case waitErr != nil:
 		cause = waitErr.Error()
 	}
-	r.logErr(job.ID, r.postError(ctx, job.ID, "the scan stopped with no result: "+cause))
+	r.logErr(job.JobID, r.postError(ctx, job.JobID, "the scan stopped with no result: "+cause))
 }
 
 func (r *ScanRunner) postError(ctx context.Context, jobID, message string) error {
@@ -291,9 +277,7 @@ func (r *ScanRunner) postLine(ctx context.Context, jobID string, line []byte) (b
 	case resp.StatusCode >= 300:
 		return false, fmt.Errorf("progress: server %d", resp.StatusCode)
 	}
-	var body struct {
-		Cancel bool `json:"cancel"`
-	}
+	var body schema.DiskScanProgressResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("progress: %w", err)
 	}

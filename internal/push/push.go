@@ -292,14 +292,6 @@ func (e *flushError) Error() string {
 	return fmt.Sprintf("server %d", e.status)
 }
 
-// ingestReply holds the orders of a 202 reply.
-type ingestReply struct {
-	Interval string `json:"interval"`
-	Update   string `json:"update"`
-	// ProcCwd is nil when the key is missing.
-	ProcCwd *bool `json:"proc_cwd"`
-}
-
 func (p *pusher) attemptFlush(ctx context.Context) error {
 	if p.now().Before(p.pausedUntil) {
 		return nil
@@ -342,9 +334,7 @@ func (p *pusher) attemptFlush(ctx context.Context) error {
 		p.handlePlanFull(resp)
 		return nil
 	case status == http.StatusGone:
-		var order struct {
-			Reason string `json:"reason"`
-		}
+		var order schema.IngestGone
 		_ = json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&order)
 		if order.Reason == "" {
 			order.Reason = "unknown"
@@ -376,7 +366,7 @@ func (p *pusher) attemptFlush(ctx context.Context) error {
 // the interval back to cfg.Interval.
 func (p *pusher) handleOrders(resp *http.Response) {
 	r := Result{Status: resp.StatusCode, Interval: p.interval}
-	var reply ingestReply
+	var reply schema.IngestResponse
 	err := json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&reply)
 	if err != nil && err != io.EOF {
 		fmt.Fprintf(p.stderr, "push: bad reply body: %v\n", err)
@@ -407,9 +397,7 @@ func (p *pusher) handleOrders(resp *http.Response) {
 
 // handlePlanFull pauses the pushes for the retry_after of a 402 reply.
 func (p *pusher) handlePlanFull(resp *http.Response) {
-	var order struct {
-		RetryAfter int `json:"retry_after"`
-	}
+	var order schema.IngestPlanFull
 	_ = json.NewDecoder(io.LimitReader(resp.Body, maxReplyBytes)).Decode(&order)
 	d := time.Duration(order.RetryAfter) * time.Second
 	if d <= 0 {
@@ -478,23 +466,21 @@ func (p *pusher) pollControl(ctx context.Context) {
 	if resp.StatusCode >= 300 {
 		return
 	}
-	var msg ControlMessage
+	var msg schema.ControlNextResponse
 	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
 		return
 	}
 	switch msg.Kind {
-	case "disk_scan":
+	case schema.ControlKindDiskScan:
 		if err := p.scans.Handle(ctx, msg); err != nil {
 			fmt.Fprintf(p.stderr, "push: disk_scan: %v\n", err)
 		}
-	case "kill_process":
+	case schema.ControlKindKillProcess:
 		if !p.cfg.AllowControl {
 			fmt.Fprintln(p.stderr, "push: kill_process: refused, --allow-control is off")
 			return
 		}
-		var payload struct {
-			PID int32 `json:"pid"`
-		}
+		var payload schema.KillProcessPayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			return
 		}

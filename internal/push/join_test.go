@@ -31,7 +31,7 @@ func TestJoinOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.Token != "tt_new" || e.NodeID != "n1" || e.Endpoint != "https://api.example" {
+	if e.SamplerToken != "tt_new" || e.NodeID != "n1" || e.Endpoint != "https://api.example" {
 		t.Fatalf("enrollment = %+v", e)
 	}
 	if (*got)["path"] != "POST /v1/sampler/join" || (*got)["type"] != "application/json" {
