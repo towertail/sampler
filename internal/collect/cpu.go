@@ -8,11 +8,10 @@ import (
 	"github.com/towertail/sampler/pkg/schema"
 )
 
-// SampleWindow is the self-sampling interval used by CPU%, net throughput,
-// and per-process CPU% calculations. 500ms is a compromise: short enough
-// that --once completes in well under a second, long enough that per-process
-// CPU% readings aren't dominated by measurement noise (processes that only
-// run for a handful of ticks within the window).
+// SampleWindow is the self-sampling interval of CPU%, disk I/O rates and
+// per-process CPU%. CPU, DiskIO and Proc wait at the same time, so one
+// sample takes about one window. 500ms is short enough for a fast --once
+// and long enough that per-process CPU% is not noise.
 const SampleWindow = 500 * time.Millisecond
 
 func CPU(window time.Duration) (schema.CPUInfo, []string) {

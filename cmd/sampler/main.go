@@ -357,13 +357,39 @@ func runStream(ctx context.Context, opts options, stdout io.Writer) error {
 }
 
 func buildSample(opts *options, window time.Duration, pc *portCache) schema.Sample {
-	var allErrs []string
+	var (
+		wg                        sync.WaitGroup
+		c                         schema.CPUInfo
+		dio                       schema.DiskIOInfo
+		p                         schema.ProcList
+		cpuErrs, ioErrs, procErrs []string
+	)
+	// The three waits run at the same time.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c, cpuErrs = collect.CPU(window)
+	}()
+	if !opts.noDisk {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dio, ioErrs = collect.DiskIO(window)
+		}()
+	}
+	if !opts.noProc {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, procErrs = collect.Proc(collect.ProcOptions{Window: window, TopN: opts.topN, ScanMax: opts.procScanMax, NoCwd: opts.noProcCwd})
+		}()
+	}
+	wg.Wait()
 
+	var allErrs []string
 	h, errs := collect.Host()
 	allErrs = append(allErrs, errs...)
-
-	c, errs := collect.CPU(window)
-	allErrs = append(allErrs, errs...)
+	allErrs = append(allErrs, cpuErrs...)
 
 	m, sw, errs := collect.Mem()
 	allErrs = append(allErrs, errs...)
@@ -381,10 +407,8 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 		ds, errs := collect.Disk()
 		allErrs = append(allErrs, errs...)
 		s.Disks = &ds
-
-		io, errs := collect.DiskIO(window)
-		allErrs = append(allErrs, errs...)
-		s.DiskIO = &io
+		allErrs = append(allErrs, ioErrs...)
+		s.DiskIO = &dio
 	}
 
 	if !opts.noNet {
@@ -400,8 +424,7 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 
 	if !opts.noProc {
-		p, errs := collect.Proc(collect.ProcOptions{Window: window, TopN: opts.topN, ScanMax: opts.procScanMax, NoCwd: opts.noProcCwd})
-		allErrs = append(allErrs, errs...)
+		allErrs = append(allErrs, procErrs...)
 		s.Procs = &p
 	}
 

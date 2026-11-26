@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -178,5 +179,21 @@ func TestResolveTokenStdin(t *testing.T) {
 	_ = os.WriteFile(path, []byte("tt_file\n"), 0o600)
 	if tok, err := resolve("", "--token-file", path); err != nil || tok != "tt_file" {
 		t.Errorf("file token = %q, %v", tok, err)
+	}
+}
+
+func TestBuildSampleOverlapsWindows(t *testing.T) {
+	opts := &options{noPorts: true, noNet: true, noHealth: true, topN: 5}
+	start := time.Now()
+	s := buildSample(opts, 600*time.Millisecond, nil)
+	elapsed := time.Since(start)
+	for _, e := range s.Errors {
+		if strings.HasPrefix(e, "disk.IOCounters") {
+			t.Skipf("DiskIO does not wait: %s", e)
+		}
+	}
+	// One after the other, the three waits take 1.8 s or more.
+	if elapsed >= 1200*time.Millisecond {
+		t.Errorf("buildSample took %v, want under 1.2s", elapsed)
 	}
 }

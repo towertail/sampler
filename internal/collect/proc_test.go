@@ -35,6 +35,16 @@ func TestProcLive(t *testing.T) {
 	if !named {
 		t.Error("expected at least one proc with PID and Name populated")
 	}
+	started := false
+	for _, p := range list.Items {
+		if p.StartTS != "" {
+			started = true
+			break
+		}
+	}
+	if !started {
+		t.Error("expected at least one kept item with StartTS")
+	}
 	if list.TopN != 5 {
 		t.Errorf("TopN: got %d want 5", list.TopN)
 	}
