@@ -31,15 +31,15 @@ Supported targets (7 triples): `linux-amd64`, `linux-arm64`, `linux-armv7`, `dar
 | self-check | `towertail-sampler self-check` or `--self-check` | Collect one sample, discard it, and print `ok`. |
 | version | `towertail-sampler version`, `--version` or `-V` | Print `towertail-sampler <version>+<sha>`. |
 | push (experimental) | `towertail-sampler push --endpoint <url> --token <token>` | Send samples over HTTPS to a Towertail server. |
-| service (experimental) | `towertail-sampler service install ...` | Install push mode as a systemd unit or launchd agent. |
+| start (experimental) | `towertail-sampler start --endpoint <url> --token-file -` | Run push mode in the background and set a reboot entry. Use `stop` and `status` to manage it. |
 
 Use `--no-disk`, `--no-net`, `--no-proc`, `--no-ports` and `--no-health` to skip a collector. Use `--no-proc-cwd` to keep the working folders of processes on the host. Run `towertail-sampler --help` for all flags.
 
 The `once`, `stream` and `self-check` modes do not make network calls.
 
-Push mode does control messages from the server only with an opt-in flag. `--allow-control` lets the server kill a process. `--allow-disk-scan` lets the server start a disk scan, and the sampler then sends the scan result to the server. `service install` takes the same flags.
+Push mode does control messages from the server only with an opt-in flag. `--allow-control` lets the server kill a process. `--allow-disk-scan` lets the server start a disk scan, and the sampler then sends the scan result to the server. `start` takes the same flags.
 
-Push mode and the `service` command are experimental. Their flags and the server protocol can change in a minor release. Do not use them in production.
+Push mode and the `start` command are experimental. Their flags and the server protocol can change in a minor release. Do not use them in production.
 
 ## Build from source
 

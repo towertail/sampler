@@ -196,7 +196,7 @@ The fixtures `testdata/scan-linux.ndjson`, `testdata/scan-darwin.ndjson` and `te
 | `--ports-interval <dur>` | 10s | How often the streaming sampler rebuilds the per-process ports table. Between refreshes the previous snapshot is re-emitted with its `collected_ts` unchanged. Ignored in `--once` mode (always one fresh scan). |
 | `--ports-max <int>` | 2000 | Hard cap on connections collected per refresh (passed straight to gopsutil's `ConnectionsMax`). When hit, `ports.truncated=true`. |
 
-The `scan` subcommand has its own flags (§3.4). The `push`, `start` and `service install` subcommands have their own flags (§3.5). No other flags for v1. The `start` command saves its flags in `sampler.json` (§2). The other modes read no config file. No env vars beyond what Go reads by default.
+The `scan` subcommand has its own flags (§3.4). The `push` and `start` subcommands have their own flags (§3.5). No other flags for v1. The `start` command saves its flags in `sampler.json` (§2). The other modes read no config file. No env vars beyond what Go reads by default.
 
 ### 3.5 Push mode (experimental)
 
@@ -204,10 +204,9 @@ The `scan` subcommand has its own flags (§3.4). The `push`, `start` and `servic
 towertail-sampler push --endpoint <url> --token-file <file> [--allow-control] [--allow-disk-scan]
 towertail-sampler start --endpoint <url> --token-file - [--allow-control] [--allow-disk-scan] [--no-proc-cwd] [--boot auto|linger|launchagent|cron|none]
 towertail-sampler start | stop | status
-towertail-sampler service install --endpoint <url> --token <token> [--system] [--allow-control] [--allow-disk-scan]
 ```
 
-Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `push` runs in the foreground and stops when its session closes. `start` runs the same loop in the background (see "Background mode" below). `service install` is deprecated: use `start`. It writes a LaunchAgent (macOS), a LaunchDaemon (macOS, `--system`) or a systemd unit (Linux) that runs `push` with the same `--allow-*` flags. `pkg/schema/push.go` holds the JSON shapes of this protocol. The server uses the same types.
+Push mode sends samples over HTTPS to a Towertail server. The server contract is `docs/wire.md` in `towertail/towertail`. `push` runs in the foreground and stops when its session closes. `start` runs the same loop in the background (see "Background mode" below). `pkg/schema/push.go` holds the JSON shapes of this protocol. The server uses the same types.
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -513,7 +512,6 @@ Running as the SSH-authenticated **non-root** user:
 │   ├── collect/                 # gopsutil wrappers: cpu, mem, disk, net, host, proc, ports, health
 │   ├── push/                    # push mode and disk scan jobs (experimental)
 │   ├── scan/                    # scan mode: walker, prune, categories, cleanup rules
-│   ├── svc/                     # service mode: systemd / launchd units (experimental)
 │   └── version/
 │       └── version.go           # ldflags-injected Version + SHA
 ├── pkg/

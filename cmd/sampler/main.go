@@ -17,7 +17,6 @@ import (
 	"github.com/towertail/sampler/internal/daemon"
 	"github.com/towertail/sampler/internal/push"
 	"github.com/towertail/sampler/internal/scan"
-	"github.com/towertail/sampler/internal/svc"
 	"github.com/towertail/sampler/internal/version"
 	"github.com/towertail/sampler/pkg/schema"
 )
@@ -207,18 +206,6 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
 					return runScan(ctx, c, stdout)
-				},
-			},
-			{
-				Name:  "service",
-				Usage: "[experimental] manage the sampler as a background service (deprecated: use start)",
-				Commands: []*cli.Command{
-					{Name: "install", Flags: serviceInstallFlags(), Action: runServiceInstall},
-					{Name: "uninstall", Action: runServiceUninstall},
-					{Name: "start", Action: runServiceStart},
-					{Name: "stop", Action: runServiceStop},
-					{Name: "status", Action: runServiceStatus},
-					{Name: "log", Flags: []cli.Flag{&cli.BoolFlag{Name: "follow", Aliases: []string{"f"}}}, Action: runServiceLog},
 				},
 			},
 			{
@@ -507,89 +494,4 @@ func runScan(ctx context.Context, c *cli.Command, stdout io.Writer) error {
 	}
 	write(res)
 	return nil
-}
-
-// -------- service subcommand plumbing --------
-
-func serviceInstallFlags() []cli.Flag {
-	return []cli.Flag{
-		&cli.StringFlag{Name: "endpoint", Usage: "server URL", Required: true},
-		&cli.StringFlag{Name: "token", Usage: "sampler bearer token", Required: true},
-		&cli.StringFlag{Name: "user", Usage: "user to run the service as (linux)"},
-		&cli.DurationFlag{Name: "interval", Value: 30 * time.Second},
-		&cli.BoolFlag{Name: "system", Usage: "install as system service instead of per-user"},
-		&cli.BoolFlag{Name: "allow-control", Usage: "allow server-issued kill_process"},
-		&cli.BoolFlag{Name: "allow-disk-scan", Usage: "allow server-issued disk scans"},
-	}
-}
-
-func serviceManager(c *cli.Command) (svc.Manager, error) {
-	return svc.NewManager(svc.Options{
-		System: c.Bool("system"),
-	})
-}
-
-func runServiceInstall(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	return m.Install(ctx, svc.InstallConfig{
-		ExecPath:      exe,
-		Endpoint:      c.String("endpoint"),
-		Token:         c.String("token"),
-		User:          c.String("user"),
-		Interval:      c.Duration("interval"),
-		AllowControl:  c.Bool("allow-control"),
-		AllowDiskScan: c.Bool("allow-disk-scan"),
-	})
-}
-
-func runServiceUninstall(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	return m.Uninstall(ctx)
-}
-
-func runServiceStart(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	return m.Start(ctx)
-}
-
-func runServiceStop(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	return m.Stop(ctx)
-}
-
-func runServiceStatus(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	st, err := m.Status(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(c.Writer, st)
-	return nil
-}
-
-func runServiceLog(ctx context.Context, c *cli.Command) error {
-	m, err := serviceManager(c)
-	if err != nil {
-		return err
-	}
-	return m.Log(ctx, c.Bool("follow"), c.Writer)
 }

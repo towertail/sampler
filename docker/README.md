@@ -23,4 +23,4 @@ docker build -t towertail-sampler:local -f docker/Dockerfile .
 
 ## Alternative: native install
 
-If Docker isn't desired, use `towertail-sampler service install` to register the binary as a systemd unit or launchd agent — see [`../README.md`](../README.md).
+If you do not want Docker, use `towertail-sampler start` to run the binary in the background. It also sets an entry that starts the sampler after a reboot. See [`../README.md`](../README.md).
