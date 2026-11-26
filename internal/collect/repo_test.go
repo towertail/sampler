@@ -3,6 +3,7 @@ package collect
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -31,7 +32,13 @@ func (s *statFake) finder(budget time.Duration) *repoFinder {
 	return &repoFinder{stat: s.stat, budget: budget, cache: map[string]string{}}
 }
 
-func abs(p string) string { return filepath.FromSlash(p) }
+// abs gives an absolute path on each OS. On Windows, a path needs a drive.
+func abs(p string) string {
+	if runtime.GOOS == "windows" {
+		p = "C:" + p
+	}
+	return filepath.FromSlash(p)
+}
 
 func TestRepoFinderGitDir(t *testing.T) {
 	s := &statFake{exists: map[string]bool{filepath.Join(abs("/r"), ".git"): true}}
