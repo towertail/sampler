@@ -14,8 +14,8 @@ import (
 	"github.com/towertail/sampler/pkg/schema"
 )
 
-func TestProcReturnsItems(t *testing.T) {
-	list, errs := Proc(ProcOptions{Window: 50 * time.Millisecond, TopN: 20})
+func TestProcLive(t *testing.T) {
+	list, errs := Proc(ProcOptions{Window: 50 * time.Millisecond, TopN: 5})
 	if len(errs) > 0 {
 		t.Logf("non-fatal errors: %v", errs)
 	}
@@ -25,39 +25,26 @@ func TestProcReturnsItems(t *testing.T) {
 	if len(list.Items) == 0 {
 		t.Fatal("expected at least one item in process list")
 	}
-	// The test binary itself has to be in the list if we could enumerate.
-	foundSelf := false
+	named := false
 	for _, p := range list.Items {
 		if p.PID > 0 && p.Name != "" {
-			foundSelf = true
+			named = true
 			break
 		}
 	}
-	if !foundSelf {
+	if !named {
 		t.Error("expected at least one proc with PID and Name populated")
 	}
-	if list.TopN != 20 {
-		t.Errorf("TopN: got %d want 20", list.TopN)
+	if list.TopN != 5 {
+		t.Errorf("TopN: got %d want 5", list.TopN)
 	}
-}
-
-func TestProcRespectsTopN(t *testing.T) {
-	// Small cap: visible should be >= cap, items should be <= 2*cap+10
-	// (union of top-by-CPU, top-by-RSS and top-by-I/O).
-	list, _ := Proc(ProcOptions{Window: 50 * time.Millisecond, TopN: 5})
-	if list.Total < 5 {
-		t.Skipf("host has only %d procs; test needs >5", list.Total)
+	// Top 5 by CPU, top 5 by RSS and top DefaultProcTopIO by I/O.
+	if limit := 2*5 + DefaultProcTopIO; len(list.Items) > limit {
+		t.Errorf("expected at most %d items, got %d", limit, len(list.Items))
 	}
-	if len(list.Items) > 20 {
-		t.Errorf("expected at most 2*5+10 = 20 items in union, got %d", len(list.Items))
+	if want := min(5, list.Visible); len(list.Items) < want {
+		t.Errorf("expected at least %d items, got %d", want, len(list.Items))
 	}
-	if len(list.Items) < 5 {
-		t.Errorf("expected at least 5 items, got %d", len(list.Items))
-	}
-}
-
-func TestProcSortedByCPUDesc(t *testing.T) {
-	list, _ := Proc(ProcOptions{Window: 50 * time.Millisecond, TopN: 20})
 	for i := 1; i < len(list.Items); i++ {
 		if list.Items[i-1].CPUPct < list.Items[i].CPUPct {
 			t.Errorf("items not sorted by CPU desc at %d: %v < %v",

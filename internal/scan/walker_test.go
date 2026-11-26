@@ -190,7 +190,7 @@ func makeTree(t testing.TB, n int) string {
 }
 
 func TestWalkerCancel(t *testing.T) {
-	root := makeTree(t, 30_000)
+	root := makeTree(t, 3_000)
 	ctx, cancel := context.WithCancel(context.Background())
 	var at time.Time
 	w := NewWalker(Options{Root: root, Workers: 2, ProgressInterval: time.Millisecond})

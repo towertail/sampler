@@ -56,31 +56,31 @@ func TestJoinOmitsEmptyMachineID(t *testing.T) {
 	}
 }
 
-func TestJoin401(t *testing.T) {
-	srv, _ := joinServer(t, http.StatusUnauthorized, `{"error":{"code":"unauthorized"}}`)
-	if _, err := Join(context.Background(), srv.URL, "j", "n", "", false); !errors.Is(err, ErrJoinRejected) {
-		t.Fatalf("err = %v", err)
+func TestJoinErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   error // nil: an error that is not ErrJoinRejected or ErrPlanFull
+	}{
+		{"401", http.StatusUnauthorized, `{"error":{"code":"unauthorized"}}`, ErrJoinRejected},
+		{"402", http.StatusPaymentRequired, `{}`, ErrPlanFull},
+		{"502", http.StatusBadGateway, "bad gateway", nil},
+		{"200 without token", http.StatusOK, `{}`, nil},
 	}
-}
-
-func TestJoin402(t *testing.T) {
-	srv, _ := joinServer(t, http.StatusPaymentRequired, `{}`)
-	if _, err := Join(context.Background(), srv.URL, "j", "n", "", false); !errors.Is(err, ErrPlanFull) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestJoinOtherStatus(t *testing.T) {
-	srv, _ := joinServer(t, http.StatusBadGateway, "bad gateway")
-	_, err := Join(context.Background(), srv.URL, "j", "n", "", false)
-	if err == nil || errors.Is(err, ErrJoinRejected) || errors.Is(err, ErrPlanFull) {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestJoinNoToken(t *testing.T) {
-	srv, _ := joinServer(t, http.StatusOK, `{}`)
-	if _, err := Join(context.Background(), srv.URL, "j", "n", "", false); err == nil {
-		t.Fatal("want an error")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _ := joinServer(t, tt.status, tt.body)
+			_, err := Join(context.Background(), srv.URL, "j", "n", "", false)
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			if tt.want != nil && !errors.Is(err, tt.want) {
+				t.Fatalf("err = %v, want %v", err, tt.want)
+			}
+			if tt.want == nil && (errors.Is(err, ErrJoinRejected) || errors.Is(err, ErrPlanFull)) {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }

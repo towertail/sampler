@@ -382,14 +382,6 @@ func TestRingOverflowDropsOldest(t *testing.T) {
 	}
 }
 
-func TestKillProcessRefusesInitAndSelf(t *testing.T) {
-	for _, pid := range []int{-1, 0, 1, os.Getpid()} {
-		if err := killProcess(pid); err == nil {
-			t.Fatalf("pid %d not refused", pid)
-		}
-	}
-}
-
 // pollKill sends one kill_process control message for pid.
 func pollKill(t *testing.T, pid int) string {
 	t.Helper()
@@ -403,9 +395,11 @@ func pollKill(t *testing.T, pid int) string {
 	return stderr.String()
 }
 
-func TestControlKillProcessRefusesInit(t *testing.T) {
-	if out := pollKill(t, 1); !strings.Contains(out, "refuse pid 1") {
-		t.Fatalf("stderr = %q", out)
+func TestControlKillProcessRefuses(t *testing.T) {
+	for _, pid := range []int{-1, 0, 1, os.Getpid()} {
+		if out := pollKill(t, pid); !strings.Contains(out, "refuse") {
+			t.Errorf("pid %d not refused, stderr = %q", pid, out)
+		}
 	}
 }
 
