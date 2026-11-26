@@ -8,33 +8,33 @@ import (
 )
 
 // Terminate sends SIGTERM to the running process and waits up to wait
-// for it to free the lock. Then it sends SIGKILL. It returns false when
-// no process runs.
-func (h Home) Terminate(wait time.Duration) (bool, error) {
+// for it to free the lock. Then it sends SIGKILL. It returns nil when no
+// process runs.
+func (h Home) Terminate(wait time.Duration) error {
 	pid, ok := h.Running()
 	if !ok {
-		return false, nil
+		return nil
 	}
 	if pid <= 1 {
-		return true, fmt.Errorf("sampler runs, but the pid file has no pid")
+		return fmt.Errorf("sampler runs, but the pid file has no pid")
 	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return true, err
+		return err
 	}
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return true, err
+		return err
 	}
 	if h.waitFree(wait) {
-		return true, nil
+		return nil
 	}
 	if err := proc.Kill(); err != nil {
-		return true, err
+		return err
 	}
 	if !h.waitFree(5 * time.Second) {
-		return true, fmt.Errorf("sampler pid %d did not stop", pid)
+		return fmt.Errorf("sampler pid %d did not stop", pid)
 	}
-	return true, nil
+	return nil
 }
 
 func (h Home) waitFree(wait time.Duration) bool {

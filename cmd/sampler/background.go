@@ -283,9 +283,6 @@ func runForeground(ctx context.Context, c *cli.Command, h daemon.Home, b bootMan
 		fmt.Fprintf(log, "state: %v\n", err)
 	}
 	fmt.Fprintf(log, "start: sampler %s, pid %d\n", version.String(), os.Getpid())
-	if cfg.Interval <= 0 {
-		cfg.Interval = defaultEvery
-	}
 	pcfg := push.Config{
 		Endpoint:      cfg.Endpoint,
 		Token:         token,
@@ -352,7 +349,7 @@ func runStop(ctx context.Context, c *cli.Command) error {
 			fmt.Fprintf(c.Root().ErrWriter, "warning: systemd stop: %v\n", err)
 		}
 	}
-	if _, err := h.Terminate(stopWait); err != nil {
+	if err := h.Terminate(stopWait); err != nil {
 		return err
 	}
 	fmt.Fprintln(c.Root().Writer, "stopped")

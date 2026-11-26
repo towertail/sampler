@@ -23,10 +23,7 @@ import (
 )
 
 type options struct {
-	once          bool
 	interval      time.Duration
-	ver           bool
-	selfCheck     bool
 	noDisk        bool
 	noNet         bool
 	noProc        bool
@@ -101,25 +98,15 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 		// Legacy top-level flags — preserved so the Mac-side bootstrap
 		// that invokes `towertail-sampler --version`, `--once`, and
 		// `--self-check` over SSH keeps working untouched.
-		Flags: []cli.Flag{
+		Flags: append(metricGatingFlags(),
 			&cli.BoolFlag{Name: "once", Usage: "emit one sample and exit"},
 			&cli.DurationFlag{Name: "interval", Usage: "emit NDJSON every <dur>"},
 			&cli.BoolFlag{Name: "version", Aliases: []string{"V"}, Usage: "print version and exit"},
 			&cli.BoolFlag{Name: "self-check", Usage: "verify the binary runs on this host"},
-			&cli.BoolFlag{Name: "no-disk", Usage: "skip disk collection"},
-			&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
-			&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
-			&cli.BoolFlag{Name: "no-ports", Usage: "skip per-process ports collection"},
-			&cli.BoolFlag{Name: "no-health", Usage: "skip host health collection"},
-			&cli.BoolFlag{Name: "no-proc-cwd", Usage: "do not send the working folder and repo of processes"},
-			&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
-			&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax, Usage: "skip the per-process scan above this process count (0 = no limit)"},
-			&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval, Usage: "ports refresh cadence in streaming mode"},
-			&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn, Usage: "max connections enumerated per ports refresh"},
 			&cli.DurationFlag{Name: "max-runtime", Usage: "exit after this duration (streaming modes only; 0 = no limit)"},
-		},
+		),
 		Action: func(ctx context.Context, c *cli.Command) error {
-			return runRoot(ctx, c, stdout, stderr)
+			return runRoot(ctx, c, stdout)
 		},
 		Commands: []*cli.Command{
 			{
@@ -127,9 +114,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Usage: "emit one sample and exit",
 				Flags: metricGatingFlags(),
 				Action: func(ctx context.Context, c *cli.Command) error {
-					opts := gatingFromCmd(c)
-					opts.once = true
-					return runOnce(opts, stdout, stderr)
+					return runOnce(gatingFromCmd(c), stdout)
 				},
 			},
 			{
@@ -143,7 +128,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 					opts := gatingFromCmd(c)
 					opts.interval = c.Duration("interval")
 					opts.maxRuntime = c.Duration("max-runtime")
-					return runStream(ctx, opts, stdout, stderr)
+					return runStream(ctx, opts, stdout)
 				},
 			},
 			{
@@ -248,12 +233,7 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 				Name:  "self-check",
 				Usage: "collect one sample, throw it away, print 'ok'",
 				Action: func(ctx context.Context, c *cli.Command) error {
-					opts := options{procScanMax: collect.DefaultProcScanMax}
-					// self-check skips ports — it's a fast "does this binary run" probe,
-					// not a full collection.
-					opts.noPorts = true
-					_ = buildSample(&opts, 50*time.Millisecond, nil)
-					fmt.Fprintln(stdout, "ok")
+					runSelfCheck(stdout)
 					return nil
 				},
 			},
@@ -261,20 +241,19 @@ func newCLI(stdout, stderr io.Writer) *cli.Command {
 	}
 }
 
-// metricGatingFlags are the shared --no-disk / --no-net / --no-proc /
-// --no-ports / --top-n / --ports-* flags used by the collect subcommands.
+// metricGatingFlags are the shared --no-* / --top-n / --ports-* flags.
 func metricGatingFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.BoolFlag{Name: "no-disk"},
-		&cli.BoolFlag{Name: "no-net"},
-		&cli.BoolFlag{Name: "no-proc"},
-		&cli.BoolFlag{Name: "no-ports"},
-		&cli.BoolFlag{Name: "no-health"},
+		&cli.BoolFlag{Name: "no-disk", Usage: "skip disk collection"},
+		&cli.BoolFlag{Name: "no-net", Usage: "skip net collection"},
+		&cli.BoolFlag{Name: "no-proc", Usage: "skip per-process collection"},
+		&cli.BoolFlag{Name: "no-ports", Usage: "skip per-process ports collection"},
+		&cli.BoolFlag{Name: "no-health", Usage: "skip host health collection"},
 		&cli.BoolFlag{Name: "no-proc-cwd", Usage: "do not send the working folder and repo of processes"},
-		&cli.IntFlag{Name: "top-n", Value: 20},
-		&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax},
-		&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval},
-		&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn},
+		&cli.IntFlag{Name: "top-n", Value: 20, Usage: "top-N cap for process list"},
+		&cli.IntFlag{Name: "proc-scan-max", Value: collect.DefaultProcScanMax, Usage: "skip the per-process scan above this process count (0 = no limit)"},
+		&cli.DurationFlag{Name: "ports-interval", Value: collect.DefaultPortsInterval, Usage: "ports refresh cadence in streaming mode"},
+		&cli.IntFlag{Name: "ports-max", Value: collect.DefaultPortsMaxConn, Usage: "max connections enumerated per ports refresh"},
 	}
 }
 
@@ -295,40 +274,30 @@ func gatingFromCmd(c *cli.Command) options {
 
 // runRoot dispatches the legacy top-level flag modes. If none match it
 // defaults to --once (matches the docs/wire-format.md §3.1 contract).
-func runRoot(ctx context.Context, c *cli.Command, stdout, stderr io.Writer) error {
+func runRoot(ctx context.Context, c *cli.Command, stdout io.Writer) error {
 	// --version / --self-check short-circuit even when other flags are set.
 	if c.Bool("version") {
 		printVersion(stdout)
 		return nil
 	}
 	if c.Bool("self-check") {
-		opts := options{procScanMax: collect.DefaultProcScanMax}
-		// self-check skips ports — it's a fast "does this binary run" probe,
-		// not a full collection.
-		opts.noPorts = true
-		_ = buildSample(&opts, 50*time.Millisecond, nil)
-		fmt.Fprintln(stdout, "ok")
+		runSelfCheck(stdout)
 		return nil
 	}
-	opts := options{
-		once:          c.Bool("once"),
-		interval:      c.Duration("interval"),
-		noDisk:        c.Bool("no-disk"),
-		noNet:         c.Bool("no-net"),
-		noProc:        c.Bool("no-proc"),
-		noPorts:       c.Bool("no-ports"),
-		noHealth:      c.Bool("no-health"),
-		noProcCwd:     c.Bool("no-proc-cwd"),
-		topN:          c.Int("top-n"),
-		procScanMax:   c.Int("proc-scan-max"),
-		maxRuntime:    c.Duration("max-runtime"),
-		portsInterval: c.Duration("ports-interval"),
-		portsMax:      c.Int("ports-max"),
-	}
+	opts := gatingFromCmd(c)
+	opts.interval = c.Duration("interval")
+	opts.maxRuntime = c.Duration("max-runtime")
 	if opts.interval > 0 {
-		return runStream(ctx, opts, stdout, stderr)
+		return runStream(ctx, opts, stdout)
 	}
-	return runOnce(opts, stdout, stderr)
+	return runOnce(opts, stdout)
+}
+
+// runSelfCheck collects one sample without ports, discards it and prints ok.
+func runSelfCheck(w io.Writer) {
+	opts := options{procScanMax: collect.DefaultProcScanMax, noPorts: true}
+	_ = buildSample(&opts, 50*time.Millisecond, nil)
+	fmt.Fprintln(w, "ok")
 }
 
 // printVersion writes the same string as host.sampler in a sample.
@@ -336,14 +305,14 @@ func printVersion(w io.Writer) {
 	fmt.Fprintf(w, "towertail-sampler %s\n", version.String())
 }
 
-func runOnce(opts options, stdout, stderr io.Writer) error {
+func runOnce(opts options, stdout io.Writer) error {
 	// One-shot: always do a fresh ports scan, no cache. The
 	// --ports-interval flag is meaningful only in streaming mode.
 	s := buildSample(&opts, collect.SampleWindow, nil)
-	return writeSample(stdout, s)
+	return writeJSON(stdout, s)
 }
 
-func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) error {
+func runStream(ctx context.Context, opts options, stdout io.Writer) error {
 	if opts.interval <= 0 {
 		opts.interval = time.Second
 	}
@@ -379,8 +348,8 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 	pc := &portCache{}
 
 	// Emit the first sample immediately.
-	s := streamingSample(&opts, pc)
-	if err := writeSample(stdout, s); err != nil {
+	s := buildSample(&opts, collect.SampleWindow, pc)
+	if err := writeJSON(stdout, s); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(opts.interval)
@@ -392,8 +361,8 @@ func runStream(ctx context.Context, opts options, stdout, stderr io.Writer) erro
 		case <-sig:
 			return nil
 		case <-ticker.C:
-			s := streamingSample(&opts, pc)
-			if err := writeSample(stdout, s); err != nil {
+			s := buildSample(&opts, collect.SampleWindow, pc)
+			if err := writeJSON(stdout, s); err != nil {
 				return err
 			}
 		}
@@ -432,7 +401,7 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 
 	if !opts.noNet {
-		n, errs := collect.Net(window)
+		n, errs := collect.Net()
 		allErrs = append(allErrs, errs...)
 		s.Net = &n
 	}
@@ -450,20 +419,16 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 
 	if !opts.noPorts {
-		max := opts.portsMax
-		if max <= 0 {
-			max = collect.DefaultPortsMaxConn
-		}
 		if pc != nil {
 			every := opts.portsInterval
 			if every <= 0 {
 				every = collect.DefaultPortsInterval
 			}
-			p, errs := pc.get(time.Now(), every, max)
+			p, errs := pc.get(time.Now(), every, opts.portsMax)
 			allErrs = append(allErrs, errs...)
 			s.Ports = p
 		} else {
-			p, errs := collect.Ports(max)
+			p, errs := collect.Ports(opts.portsMax)
 			allErrs = append(allErrs, errs...)
 			s.Ports = &p
 		}
@@ -474,16 +439,6 @@ func buildSample(opts *options, window time.Duration, pc *portCache) schema.Samp
 	}
 	s.Errors = allErrs
 	return s
-}
-
-func streamingSample(opts *options, pc *portCache) schema.Sample {
-	return buildSample(opts, collect.SampleWindow, pc)
-}
-
-func writeSample(w io.Writer, s schema.Sample) error {
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(false)
-	return enc.Encode(s)
 }
 
 // stdin is read by the scan command. A scan stops on EOF. Tests set it.

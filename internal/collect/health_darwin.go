@@ -6,6 +6,15 @@ import (
 	"github.com/towertail/sampler/pkg/schema"
 )
 
+// memPressurePct returns the share of memory in use, 0…100, from the
+// free memory percentage of the kernel.
+func memPressurePct(freePct uint32) int {
+	if freePct >= 100 {
+		return 0
+	}
+	return 100 - int(freePct)
+}
+
 // sZomb is p_stat for a zombie in <sys/proc.h>.
 const sZomb = 5
 

@@ -556,7 +556,7 @@ func TestStartDetachReal(t *testing.T) {
 	defer srv.Close()
 	dir := newHomeDir(t)
 	h := daemon.NewHome(dir)
-	t.Cleanup(func() { _, _ = h.Terminate(5 * time.Second) })
+	t.Cleanup(func() { _ = h.Terminate(5 * time.Second) })
 
 	setStdin(t, strings.NewReader("tok\n"))
 	code, stdout, stderr := runArgs("start", "--endpoint", srv.URL, "--token-file", "-", "--boot", "none", "--home", dir)

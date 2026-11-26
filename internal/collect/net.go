@@ -2,7 +2,6 @@ package collect
 
 import (
 	"strings"
-	"time"
 
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/towertail/sampler/pkg/schema"
@@ -52,8 +51,7 @@ func sumCounters(stats []net.IOCountersStat) (rx, tx uint64) {
 // compute rates from counter deltas between ticks; rx_bps/tx_bps are
 // left at 0 because in-process self-sampling over a short window
 // severely undersamples bursty traffic.
-func Net(window time.Duration) (schema.NetInfo, []string) {
-	_ = window
+func Net() (schema.NetInfo, []string) {
 	var errs []string
 	var n schema.NetInfo
 
@@ -65,7 +63,5 @@ func Net(window time.Duration) (schema.NetInfo, []string) {
 	rx, tx := sumCounters(per)
 	n.RxCum = int64(rx)
 	n.TxCum = int64(tx)
-	n.RxBps = 0
-	n.TxBps = 0
 	return n, errs
 }

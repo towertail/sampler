@@ -46,17 +46,15 @@ type ScanProcess struct {
 // ScanStarter starts the scan subcommand with args.
 type ScanStarter func(ctx context.Context, args []string) (*ScanProcess, error)
 
-// ExecScanStarter starts `<exe> scan …` as a subprocess. An empty exe
-// is the executable of this process. The subprocess lowers its own
+// ExecScanStarter starts `<exe> scan …` as a subprocess, where exe is
+// the executable of this process. The subprocess lowers its own
 // priority, so the push process keeps its priority. Closing the stdin
 // of the subprocess stops the scan.
-func ExecScanStarter(exe string, stderr io.Writer) ScanStarter {
+func ExecScanStarter(stderr io.Writer) ScanStarter {
 	return func(ctx context.Context, args []string) (*ScanProcess, error) {
-		if exe == "" {
-			var err error
-			if exe, err = os.Executable(); err != nil {
-				return nil, err
-			}
+		exe, err := os.Executable()
+		if err != nil {
+			return nil, err
 		}
 		cmd := exec.CommandContext(ctx, exe, args...)
 		cmd.Stderr = stderr

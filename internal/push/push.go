@@ -35,10 +35,8 @@ type Config struct {
 	AllowControl  bool
 	// AllowDiskScan lets disk_scan control messages start a scan.
 	AllowDiskScan bool
-	// ScanExe is the sampler binary for scans. Empty is this executable.
-	ScanExe   string
-	Heartbeat time.Duration
-	Insecure  bool
+	Heartbeat     time.Duration
+	Insecure      bool
 	// Recorder gets the result of each push. Nil means no record.
 	Recorder Recorder
 	// UserAgent is sent with each ingest request. Empty sends the Go default.
@@ -171,7 +169,7 @@ func newPusher(cfg Config, stderr io.Writer) *pusher {
 		cfg:    cfg,
 		client: client,
 		ring:   newRing(cfg.Buffer),
-		scans:  NewScanRunner(cfg, client, ExecScanStarter(cfg.ScanExe, stderr), stderr),
+		scans:  NewScanRunner(cfg, client, ExecScanStarter(stderr), stderr),
 		stderr: stderr,
 		now:    time.Now,
 

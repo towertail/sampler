@@ -93,12 +93,6 @@ func TestUnionTopNDedups(t *testing.T) {
 	}
 }
 
-func TestIsRoot(t *testing.T) {
-	// Don't assert the value (test env varies); just confirm it's callable
-	// and matches the low-level euid check we rely on.
-	_ = IsRoot()
-}
-
 func TestProcSkipsScanAboveMax(t *testing.T) {
 	list, _ := Proc(ProcOptions{Window: 50 * time.Millisecond, TopN: 20, ScanMax: 1})
 	if !list.Skipped {

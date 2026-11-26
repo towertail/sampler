@@ -11,17 +11,6 @@ import (
 	"github.com/towertail/sampler/pkg/schema"
 )
 
-// IsRoot reports whether the sampler is running with the host's
-// privileged regime — euid 0 on Unix, an elevated token on Windows.
-// Linux drops into the "can read every /proc/<pid>" regime here; macOS
-// gets to enumerate other users' processes; Windows can query
-// cross-user GetProcessIoCounters and WMI classes otherwise gated.
-// We use this both to gate optional fields and to tell the client the
-// process list is comprehensive.
-func IsRoot() bool {
-	return isElevated()
-}
-
 // DefaultProcScanMax is the process count above which Proc skips the
 // per-process scan. The scan costs about 0.6 ms per process, so 10k
 // processes take about 6 s, close to the client's 10 s timeout.
@@ -113,7 +102,7 @@ type procSnap struct {
 func (s procScan) run() (schema.ProcList, []string) {
 	var errs []string
 	list := schema.ProcList{
-		Root: IsRoot(),
+		Root: isElevated(),
 		TopN: s.opts.TopN,
 	}
 

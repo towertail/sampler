@@ -3,6 +3,7 @@ package collect
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,17 +42,8 @@ var excludedFS = map[string]bool{
 	"hugetlbfs":     true,
 }
 
-func hasOpt(opts []string, name string) bool {
-	for _, o := range opts {
-		if o == name {
-			return true
-		}
-	}
-	return false
-}
-
 func isReadOnly(opts []string) bool {
-	return hasOpt(opts, "ro") || hasOpt(opts, "read-only")
+	return slices.Contains(opts, "ro") || slices.Contains(opts, "read-only")
 }
 
 const (
@@ -119,7 +111,7 @@ func skipPartition(p disk.PartitionStat) bool {
 	if strings.HasPrefix(p.Device, "OrbStack:") {
 		return true
 	}
-	if fs == "nfs" && (hasOpt(p.Opts, "automounted") || hasOpt(p.Opts, "nobrowse")) {
+	if fs == "nfs" && (slices.Contains(p.Opts, "automounted") || slices.Contains(p.Opts, "nobrowse")) {
 		return true
 	}
 	// Skip nullfs/snap-like overlay paths that sneak through.

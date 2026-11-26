@@ -1,12 +1,9 @@
 package collect
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 func TestNetNonNegative(t *testing.T) {
-	n, errs := Net(50 * time.Millisecond)
+	n, errs := Net()
 	if len(errs) > 0 {
 		t.Logf("non-fatal errors: %v", errs)
 	}

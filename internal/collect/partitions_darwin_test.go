@@ -2,7 +2,10 @@
 
 package collect
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestPartitionsDarwin(t *testing.T) {
 	parts, err := partitions()
@@ -16,7 +19,7 @@ func TestPartitionsDarwin(t *testing.T) {
 		if p.Fstype == "" {
 			t.Errorf("empty fstype for /: %+v", p)
 		}
-		if !hasOpt(p.Opts, "rw") && !hasOpt(p.Opts, "ro") {
+		if !slices.Contains(p.Opts, "rw") && !slices.Contains(p.Opts, "ro") {
 			t.Errorf("opts has no rw or ro: %v", p.Opts)
 		}
 		return

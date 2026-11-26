@@ -1,6 +1,7 @@
 package collect
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -45,7 +46,7 @@ func Ports(maxConn int) (schema.PortList, []string) {
 	}
 	var errs []string
 	list := schema.PortList{
-		Root:        IsRoot(),
+		Root:        isElevated(),
 		CollectedTS: schema.FormatTS(time.Now()),
 		MaxConn:     maxConn,
 		Items:       []schema.PortItem{},
@@ -174,10 +175,10 @@ func Ports(maxConn int) (schema.PortList, []string) {
 			}
 		}
 		if len(b.listenTCP) > 0 {
-			item.ListenTCP = sortedKeys(b.listenTCP)
+			item.ListenTCP = slices.Sorted(maps.Keys(b.listenTCP))
 		}
 		if len(b.listenUDP) > 0 {
-			item.ListenUDP = sortedKeys(b.listenUDP)
+			item.ListenUDP = slices.Sorted(maps.Keys(b.listenUDP))
 		}
 		if len(b.remotes) > 0 {
 			item.TopRemotePorts = topRemotePorts(b.remotes, 5)
@@ -199,15 +200,6 @@ func Ports(maxConn int) (schema.PortList, []string) {
 	})
 	list.Items = items
 	return list, errs
-}
-
-func sortedKeys(m map[uint32]struct{}) []uint32 {
-	out := make([]uint32, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
 }
 
 func topRemotePorts(m map[uint32]int, n int) []schema.PortCount {

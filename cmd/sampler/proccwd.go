@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/towertail/sampler/internal/collect"
 	"github.com/towertail/sampler/internal/push"
 	"github.com/towertail/sampler/pkg/schema"
 )
@@ -44,6 +45,6 @@ func (s *procCwdSwitch) sampleFn(opts options, pc *portCache) push.SampleFn {
 	return func() schema.Sample {
 		o := opts
 		o.noProcCwd = s.off.Load()
-		return streamingSample(&o, pc)
+		return buildSample(&o, collect.SampleWindow, pc)
 	}
 }
